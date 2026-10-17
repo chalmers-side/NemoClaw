@@ -159,6 +159,22 @@ host_onboard_resume_only() {
       return 0
     fi
   fi
+  if grep -q "Could not resolve the OpenShell native home/workspace" "$log" \
+    && grep -q "sandbox is not ready" "$log"; then
+    printf 'sandbox %s is not ready and has no home to back up; recreating without a backup\n' \
+      "$NEMOCLAW_SANDBOX_NAME"
+    if NEMOCLAW_RECREATE_WITHOUT_BACKUP=1 host_nemoclaw_cmd onboard \
+      --non-interactive \
+      --yes-i-accept-third-party-software \
+      --yes \
+      --resume \
+      --no-ollama-autostart \
+      --agent "$NEMOCLAW_AGENT" \
+      --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
+      rm -f "$log"
+      return 0
+    fi
+  fi
   host_onboard_failure "$log"
 }
 
