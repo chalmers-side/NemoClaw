@@ -148,10 +148,15 @@ host_onboard_resume_only() {
   fi
   printf 'starting a new onboarding session for %s\n' "$NEMOCLAW_SANDBOX_NAME"
   clear_unfinished_route_reservation
-  enable_providers_v2 "$log"
-  # Interrupted onboarding is discarded with --fresh. --resume only continues
-  # the same recorded route, and this session already owns a different one.
-  if host_nemoclaw_cmd onboard \
+  if openshell gateway list -o json 2>/dev/null | grep -q '"name": "nemoclaw"'; then
+    enable_providers_v2 "$log"
+  else
+    printf 'gateway nemoclaw is not registered yet; onboard will register it\n'
+  fi
+  # poc-claw is not ready, so it has no workspace to snapshot. NemoClaw stops
+  # the recreate until this is set. One onboard only; a second --fresh sees a
+  # different gateway authority and refuses to delete the sandbox.
+  if NEMOCLAW_RECREATE_WITHOUT_BACKUP=1 host_nemoclaw_cmd onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
     --yes \
@@ -161,22 +166,6 @@ host_onboard_resume_only() {
     --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
     rm -f "$log"
     return 0
-  fi
-  if grep -q "Could not resolve the OpenShell native home/workspace" "$log" \
-    && grep -q "sandbox is not ready" "$log"; then
-    printf 'sandbox %s is not ready, so there is no workspace to back up\n' \
-      "$NEMOCLAW_SANDBOX_NAME"
-    if NEMOCLAW_RECREATE_WITHOUT_BACKUP=1 host_nemoclaw_cmd onboard \
-      --non-interactive \
-      --yes-i-accept-third-party-software \
-      --yes \
-      --fresh \
-      --no-ollama-autostart \
-      --agent "$NEMOCLAW_AGENT" \
-      --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
-      rm -f "$log"
-      return 0
-    fi
   fi
   host_onboard_failure "$log"
 }
