@@ -74,17 +74,21 @@ ensure_host_nemohermes() {
 }
 
 host_onboard_resume_only() {
+  local log
+  log="$(mktemp)"
   printf 'onboarding %s with --resume\n' "$NEMOCLAW_SANDBOX_NAME"
-  if ! host_nemoclaw_cmd onboard \
+  if host_nemoclaw_cmd onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
     --yes \
     --resume \
     --no-ollama-autostart \
     --agent "$NEMOCLAW_AGENT" \
-    --name "$NEMOCLAW_SANDBOX_NAME"; then
-    die "onboard --resume failed for ${NEMOCLAW_SANDBOX_NAME}; refusing to create a new sandbox"
+    --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
+    rm -f "$log"
+    return 0
   fi
+  die "onboard --resume failed for ${NEMOCLAW_SANDBOX_NAME}; refusing to create a new sandbox. $(tail -n 40 "$log" | sed -E 's/((TOKEN|SECRET|API_KEY|AUTHORIZATION|BEARER|PASSWORD)[=:][[:space:]]*)[^[:space:]]+/\1[redacted]/Ig')"
 }
 
 host_upgrade_sandboxes() {
