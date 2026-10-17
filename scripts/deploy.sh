@@ -73,11 +73,32 @@ ensure_host_nemohermes() {
     || die "nemohermes install finished but the binary is not on PATH"
 }
 
+host_onboard_failure() {
+  local log="$1"
+  {
+    printf '\n--- openshell status ---\n'
+    openshell status || true
+    printf '\n--- openshell gateway list ---\n'
+    openshell gateway list -o json || true
+  } >>"$log" 2>&1 || true
+  die "onboard failed for ${NEMOCLAW_SANDBOX_NAME}; refusing --fresh. $(tail -c 1500 "$log" | sed -E 's/((TOKEN|SECRET|API_KEY|AUTHORIZATION|BEARER|PASSWORD)[=:][[:space:]]*)[^[:space:]]+/\1[redacted]/Ig')"
+}
+
 host_onboard_resume_only() {
-  local log
+  local log bin_dir
   log="$(mktemp)"
   mkdir -p "${HOME}/.nemoclaw"
   chmod 700 "${HOME}/.nemoclaw"
+  bin_dir="${HOME}/.nemoclaw/openshell/bin"
+  if [[ -x "${bin_dir}/openshell" && -x "${bin_dir}/openshell-gateway" ]]; then
+    export NEMOCLAW_OPENSHELL_BIN="${bin_dir}/openshell"
+    export NEMOCLAW_OPENSHELL_GATEWAY_BIN="${bin_dir}/openshell-gateway"
+    export PATH="${bin_dir}:${PATH}"
+  fi
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    export DOCKER_CONFIG="$(mktemp -d)"
+    printf '%s\n' '{}' >"${DOCKER_CONFIG}/config.json"
+  fi
   printf 'onboarding %s with --resume\n' "$NEMOCLAW_SANDBOX_NAME"
   if host_nemoclaw_cmd onboard \
     --non-interactive \
@@ -103,7 +124,7 @@ host_onboard_resume_only() {
       return 0
     fi
   fi
-  die "onboard failed for ${NEMOCLAW_SANDBOX_NAME}; refusing --fresh. $(tail -n 40 "$log" | sed -E 's/((TOKEN|SECRET|API_KEY|AUTHORIZATION|BEARER|PASSWORD)[=:][[:space:]]*)[^[:space:]]+/\1[redacted]/Ig')"
+  host_onboard_failure "$log"
 }
 
 host_upgrade_sandboxes() {
