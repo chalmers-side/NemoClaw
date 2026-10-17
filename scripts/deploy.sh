@@ -103,6 +103,18 @@ host_onboard_resume_only() {
     # The CLI only finds mTLS certs via OPENSHELL_LOCAL_TLS_DIR. The gateway
     # writes them under its state dir, which is not the CLI default.
     export OPENSHELL_LOCAL_TLS_DIR="${HOME}/.local/state/nemoclaw/openshell-docker-gateway/tls"
+    local openshell_config="${HOME}/.config/openshell"
+    mkdir -p "${openshell_config}/gateways" 2>/dev/null || true
+    if [[ ! -w "${openshell_config}/gateways" ]]; then
+      chmod -R u+rwX "$openshell_config" 2>/dev/null || true
+    fi
+    if [[ ! -w "${openshell_config}/gateways" ]] && sudo -n true >/dev/null 2>&1; then
+      sudo -n chown -R "$(id -un):$(id -gn)" "$openshell_config" || true
+      sudo -n chmod -R u+rwX "$openshell_config" || true
+    fi
+    if [[ ! -w "${openshell_config}/gateways" ]]; then
+      die "openshell cannot write ${openshell_config}/gateways. $(ls -ld "${HOME}/.config" "$openshell_config" "${openshell_config}/gateways" 2>&1 || true)"
+    fi
   fi
   printf 'onboarding %s with --resume\n' "$NEMOCLAW_SANDBOX_NAME"
   if host_nemoclaw_cmd onboard \
