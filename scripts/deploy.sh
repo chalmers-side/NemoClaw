@@ -74,7 +74,13 @@ ensure_host_nemohermes() {
 }
 
 enable_providers_v2() {
-  openshell settings set -g nemoclaw --global --key providers_v2_enabled --value true --yes
+  local log="$1"
+  {
+    printf '\n--- providers_v2 set ---\n'
+    openshell settings set -g nemoclaw --global --key providers_v2_enabled --value true --yes
+    printf '\n--- providers_v2 get ---\n'
+    openshell settings get -g nemoclaw --global --json || true
+  } >>"$log" 2>&1 || true
 }
 
 host_onboard_failure() {
@@ -83,7 +89,7 @@ host_onboard_failure() {
     printf '\n--- openshell status ---\n'
     openshell status || true
   } >>"$log" 2>&1 || true
-  reason="$(grep -E 'Error:|×|failed to|did not|Permission denied|not ready|Cannot' "$log" | tail -n 20 || true)"
+  reason="$(grep -E 'Error:|×|failed to|did not|Permission denied|not ready|Cannot|providers_v2' "$log" | tail -n 20 || true)"
   die "onboard failed for ${NEMOCLAW_SANDBOX_NAME}; refusing --fresh. ${reason:-$(tail -c 800 "$log")}"
 }
 
@@ -113,7 +119,7 @@ host_onboard_resume_only() {
     fi
   fi
   printf 'onboarding %s with --resume\n' "$NEMOCLAW_SANDBOX_NAME"
-  enable_providers_v2 || true
+  enable_providers_v2 "$log"
   if host_nemoclaw_cmd onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
@@ -140,7 +146,7 @@ host_onboard_resume_only() {
   fi
   if grep -q "providers_v2_enabled=true" "$log"; then
     printf 'enabling providers_v2 on gateway nemoclaw\n'
-    enable_providers_v2 || host_onboard_failure "$log"
+    enable_providers_v2 "$log"
     if host_nemoclaw_cmd onboard \
       --non-interactive \
       --yes-i-accept-third-party-software \
