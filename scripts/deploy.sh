@@ -83,6 +83,35 @@ enable_providers_v2() {
   } >>"$log" 2>&1 || true
 }
 
+# Drop only an unfinished route reservation. A ready sandbox has no
+# pendingRouteReservation, so this leaves it in place. Do not use
+# `sandbox destroy`: that also removes the Hermes state volume.
+clear_unfinished_route_reservation() {
+  local registry="${HOME}/.nemoclaw/sandboxes.json"
+  [[ -f "$registry" ]] || return 0
+  python3 - "$registry" "$NEMOCLAW_SANDBOX_NAME" <<'PY'
+import json, sys
+path, name = sys.argv[1], sys.argv[2]
+with open(path) as handle:
+    data = json.load(handle)
+sandboxes = data.get("sandboxes") or {}
+entry = sandboxes.get(name)
+if not isinstance(entry, dict):
+    raise SystemExit(0)
+if entry.get("pendingRouteReservation") is not True or entry.get("pendingCreateIdentity") is not None:
+    raise SystemExit(0)
+del sandboxes[name]
+data["sandboxes"] = sandboxes
+if data.get("defaultSandbox") == name:
+    data["defaultSandbox"] = next(iter(sandboxes), None)
+with open(path, "w") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
+print(f"removed pending route reservation for {name}")
+PY
+  openshell sandbox delete -g nemoclaw "$NEMOCLAW_SANDBOX_NAME" || true
+}
+
 host_onboard_failure() {
   local log="$1" reason
   {
@@ -119,6 +148,7 @@ host_onboard_resume_only() {
     fi
   fi
   printf 'starting a new onboarding session for %s\n' "$NEMOCLAW_SANDBOX_NAME"
+  clear_unfinished_route_reservation
   enable_providers_v2 "$log"
   # Interrupted onboarding is discarded with --fresh. --resume only continues
   # the same recorded route, and this session already owns a different one.
