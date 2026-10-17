@@ -90,7 +90,7 @@ host_onboard_failure() {
     openshell status || true
   } >>"$log" 2>&1 || true
   reason="$(grep -E 'Error:|×|failed to|did not|Permission denied|not ready|Cannot|providers_v2' "$log" | tail -n 20 || true)"
-  die "onboard failed for ${NEMOCLAW_SANDBOX_NAME}; refusing --fresh. ${reason:-$(tail -c 800 "$log")}"
+  die "onboard failed for ${NEMOCLAW_SANDBOX_NAME}. ${reason:-$(tail -c 800 "$log")}"
 }
 
 host_onboard_resume_only() {
@@ -118,76 +118,20 @@ host_onboard_resume_only() {
       chmod 700 "$XDG_CONFIG_HOME"
     fi
   fi
-  printf 'onboarding %s with --resume\n' "$NEMOCLAW_SANDBOX_NAME"
+  printf 'starting a new onboarding session for %s\n' "$NEMOCLAW_SANDBOX_NAME"
   enable_providers_v2 "$log"
+  # Interrupted onboarding is discarded with --fresh. --resume only continues
+  # the same recorded route, and this session already owns a different one.
   if host_nemoclaw_cmd onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
     --yes \
-    --resume \
+    --fresh \
     --no-ollama-autostart \
     --agent "$NEMOCLAW_AGENT" \
     --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
     rm -f "$log"
     return 0
-  fi
-  if grep -q "No resumable onboarding session was found." "$log"; then
-    printf 'no interrupted session; onboarding %s without --fresh\n' "$NEMOCLAW_SANDBOX_NAME"
-    if host_nemoclaw_cmd onboard \
-      --non-interactive \
-      --yes-i-accept-third-party-software \
-      --yes \
-      --no-ollama-autostart \
-      --agent "$NEMOCLAW_AGENT" \
-      --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
-      rm -f "$log"
-      return 0
-    fi
-  fi
-  if grep -q "providers_v2_enabled=true" "$log"; then
-    printf 'enabling providers_v2 on gateway nemoclaw\n'
-    enable_providers_v2 "$log"
-    if host_nemoclaw_cmd onboard \
-      --non-interactive \
-      --yes-i-accept-third-party-software \
-      --yes \
-      --resume \
-      --no-ollama-autostart \
-      --agent "$NEMOCLAW_AGENT" \
-      --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
-      rm -f "$log"
-      return 0
-    fi
-  fi
-  if grep -q "Could not resolve the OpenShell native home/workspace" "$log" \
-    && grep -q "sandbox is not ready" "$log"; then
-    printf 'sandbox %s is not ready and has no home to back up; recreating without a backup\n' \
-      "$NEMOCLAW_SANDBOX_NAME"
-    if NEMOCLAW_RECREATE_WITHOUT_BACKUP=1 host_nemoclaw_cmd onboard \
-      --non-interactive \
-      --yes-i-accept-third-party-software \
-      --yes \
-      --resume \
-      --no-ollama-autostart \
-      --agent "$NEMOCLAW_AGENT" \
-      --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
-      rm -f "$log"
-      return 0
-    fi
-  fi
-  if grep -q "inference route reservation cannot change before the owning create transaction completes" "$log"; then
-    printf 'clearing the interrupted onboarding session for %s\n' "$NEMOCLAW_SANDBOX_NAME"
-    if NEMOCLAW_RECREATE_WITHOUT_BACKUP=1 host_nemoclaw_cmd onboard \
-      --non-interactive \
-      --yes-i-accept-third-party-software \
-      --yes \
-      --fresh \
-      --no-ollama-autostart \
-      --agent "$NEMOCLAW_AGENT" \
-      --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
-      rm -f "$log"
-      return 0
-    fi
   fi
   host_onboard_failure "$log"
 }
