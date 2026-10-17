@@ -260,14 +260,19 @@ ensure_homebrew_openshell_gateway() {
   local uid i code
   uid="$(id -u)"
   # brew tap uses the login keychain. A LaunchAgent gets errSecInteractionNotAllowed
-  # (-25308) and git then asks for a GitHub username. The tap is public.
+  # (-25308). Global git config can still force a GitHub username, and the runner
+  # has no tty ("Device not configured"). Ignore system and global git config.
   if ! brew tap | grep -qx 'nvidia/openshell'; then
     local tap_dest
     tap_dest="$(brew --repository)/Library/Taps/nvidia/homebrew-openshell"
+    rm -rf "$tap_dest"
     mkdir -p "$(dirname "$tap_dest")"
-    git -c credential.helper= clone --origin=origin \
-      https://github.com/nvidia/homebrew-openshell "$tap_dest"
-    git -C "$tap_dest" config --local credential.helper ''
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_TERMINAL_PROMPT=0 \
+      git -c credential.helper='!true' clone --origin=origin \
+        https://github.com/nvidia/homebrew-openshell "$tap_dest"
+    git -C "$tap_dest" config --local credential.helper '!true'
   fi
   # Newer Homebrew refuses third-party formulae until the tap is trusted.
   brew trust nvidia/openshell >/dev/null 2>&1 || true
