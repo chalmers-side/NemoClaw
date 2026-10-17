@@ -1,6 +1,10 @@
 name: Deploy NemoClaw
 
 on:
+  push:
+    branches:
+      - main
+      - 'feature**'
   workflow_dispatch:
     inputs:
       target:
@@ -21,7 +25,8 @@ on:
           - upgrade
 
 concurrency:
-  group: nemoclaw-${{ inputs.target }}
+  # Push events have no inputs; those deploys go to poc.
+  group: nemoclaw-${{ inputs.target || 'poc' }}
   cancel-in-progress: false
 
 permissions:
@@ -29,10 +34,11 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy ${{ inputs.target }}
+    name: Deploy ${{ inputs.target || 'poc' }}
+    # Push to main or feature* deploys poc. A manual run still picks the target.
     # poc runs on the macOS ARM64 self-hosted runner. Other targets stay on nemoclaw,<user>.
-    runs-on: ${{ fromJSON(inputs.target == 'poc' && '["self-hosted", "macOS", "ARM64"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target)) }}
-    environment: ${{ inputs.target }}
+    runs-on: ${{ fromJSON((inputs.target || 'poc') == 'poc' && '["self-hosted", "macOS", "ARM64"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target || 'poc')) }}
+    environment: ${{ inputs.target || 'poc' }}
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -41,5 +47,5 @@ jobs:
       - name: Deploy
         run: bash ./scripts/deploy.sh "$TARGET" "$ACTION"
         env:
-          TARGET: ${{ inputs.target }}
-          ACTION: ${{ inputs.action }}
+          TARGET: ${{ inputs.target || 'poc' }}
+          ACTION: ${{ inputs.action || 'onboard' }}
