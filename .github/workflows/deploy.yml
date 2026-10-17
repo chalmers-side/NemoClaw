@@ -1,0 +1,44 @@
+name: Deploy NemoClaw
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Machine to deploy (personal_config directory name)
+        required: true
+        type: choice
+        options:
+          - poc
+          - chalmers
+          - cliff
+      action:
+        description: onboard installs or recreates the sandbox; upgrade updates the pinned NemoClaw install
+        required: true
+        type: choice
+        default: onboard
+        options:
+          - onboard
+          - upgrade
+
+concurrency:
+  group: nemoclaw-${{ inputs.target }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.target }}
+    runs-on: [self-hosted, nemoclaw, ${{ inputs.target }}]
+    environment: ${{ inputs.target }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy
+        run: bash ./scripts/deploy.sh "$TARGET" "$ACTION"
+        env:
+          TARGET: ${{ inputs.target }}
+          ACTION: ${{ inputs.action }}

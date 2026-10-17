@@ -1,1 +1,251 @@
 # NemoClaw
+
+這個 repo 是 NVIDIA [NemoClaw](https://github.com/NVIDIA/NemoClaw) 的**多使用者操作倉**，不是上游原始碼的 fork。用 GitHub Actions 把官方 NemoClaw 部署到 `chalmers` / `cliff` 各自的機器。
+
+可提交的 per-user 設定在 `personal_config/<user>/config.env`。API key、bot token 寫在同目錄的 `personal_config/<user>/secrets.env`，**不進 git，也不放 GitHub Secrets**。
+
+機器上的長期服務全部跑在 `compose/docker-compose.yml`：OpenShell gateway、Ollama、NemoClaw controller。Sandbox 仍由 gateway 用 Docker socket 另外建立，不是 compose service。
+
+上游文件：
+
+- [Headless 部署](https://docs.nvidia.com/nemoclaw/user-guide/openclaw/deployment/deploy-to-headless-server)
+- [Credential storage](https://docs.nvidia.com/nemoclaw/user-guide/openclaw/security/credential-storage)
+- [OpenShell Docker Compose](https://docs.nvidia.com/openshell/get-started/tutorials/docker-compose)
+
+## 架構
+
+```
+GitHub Actions (選機器)
+        │
+        ▼
+  Environment: chalmers | cliff | poc
+        │
+        ▼
+  self-hosted runner (labels: nemoclaw,<user>)
+        │
+        ├─ personal_config/<user>/config.env    ← git
+        └─ personal_config/<user>/secrets.env   ← gitignore，只在該機器
+                │
+                ▼
+        docker compose up
+          ├─ init / gateway   OpenShell（官方 image + docker.sock）
+          ├─ ollama           共用本機 LLM
+          └─ nemoclaw         CLI / onboard / inference proxy
+                │
+                ▼
+        sandbox 容器（gateway 建立的 sibling，不寫進 compose）
+```
+
+每次部署在 GitHub 選一台機器。Job 只跑在該使用者的 self-hosted runner 上，所以金鑰不必離開那台機器。
+
+本機 PoC（這台 Mac）用 `personal_config/poc/`：agent 在 `config.env` 切換，共用 LLM 是 Compose 裡的 Ollama，不需要 cloud API key。
+
+## 本機 PoC（poc）
+
+在這台機器試跑，不經過 GitHub Actions：
+
+1. 打開 **Docker Desktop**，等到 `docker info` 成功
+2. 編輯 [`personal_config/poc/config.env`](personal_config/poc/config.env)：
+   - `NEMOCLAW_AGENT`：`hermes`（預設）、`openclaw`、或 `langchain-deepagents-code`
+   - `NEMOCLAW_MODEL`：共用本機模型。Hermes 需要 native context ≥ 64000，PoC 用 `qwen3:4b`。真 3B（`qwen2.5:3b`）請把 agent 改成 `openclaw`
+3. 部署：
+
+```bash
+bash ./scripts/deploy.sh poc onboard
+bash ./scripts/status.sh poc
+```
+
+`deploy.sh` 會 `docker compose up --build` 整份 stack，並把模型 pull 進 `nemoclaw-ollama`。等價於在設好 `NEMOCLAW_TARGET` / `NEMOCLAW_INSTALL_REF` 之後自己跑 compose。
+
+服務分工：
+
+- **gateway**：`ghcr.io/nvidia/openshell/gateway`，資料在 `/var/lib/openshell`（host 與容器同一路徑，NVIDIA 要求）
+- **Ollama**：`nemoclaw-ollama`，host 只綁 `127.0.0.1:11434`
+- **NemoClaw controller**：`nemoclaw-cli`，負責 onboard、CLI、以及 sandbox 打回的 inference proxy（`127.0.0.1:11435`）
+- **Sandbox**：gateway 建立的 Docker 容器，不列在 compose 裡
+
+不要同時開 Homebrew OpenShell / Homebrew 或桌面版 Ollama，否則會佔走 8080 / 11434。部署腳本會停掉佔 port 的 host process。換 agent 只改 `NEMOCLAW_AGENT` 再 onboard；換模型改 `NEMOCLAW_MODEL` 後再 deploy。
+
+已裝好之後：
+
+```bash
+docker compose -f compose/docker-compose.yml --project-directory compose exec nemoclaw nemohermes poc-claw status
+docker compose -f compose/docker-compose.yml --project-directory compose exec nemoclaw nemohermes poc-claw connect
+```
+
+或直接 `bash ./scripts/status.sh poc`。
+
+Hermes 官方要求 loaded context ≥ 64000。`qwen2.5:3b` 只有 32k，不能給 Hermes 用；PoC 預設 `qwen3:4b`。要用真 3B 時改：
+
+```bash
+# personal_config/poc/config.env
+NEMOCLAW_AGENT=openclaw
+NEMOCLAW_MODEL=qwen2.5:3b
+```
+
+## 什麼可以 commit
+
+| 路徑 | 進 git？ | 內容 |
+| --- | --- | --- |
+| `personal_config/<user>/config.env` | 是 | OS、provider **名稱**、sandbox 名稱、policy |
+| `personal_config/secrets.env.example` | 是 | 金鑰欄位範本（空值） |
+| `personal_config/<user>/secrets.env` | **否** | 該使用者的 API key / bot token |
+| `NEMOCLAW_VERSION` | 是 | 上游 NemoClaw commit SHA pin |
+| `OPENSHELL_VERSION` | 是 | 上游 OpenShell release pin（image tag 去掉 `v`） |
+| `compose/` | 是 | gateway + Ollama + NemoClaw controller |
+| GitHub Environment secrets | **否** | 留空 |
+| Runner registration token、`.runner` | **否** | 只在該機器使用一次 |
+
+`config.env` 可寫的變數：
+
+- `OS`：`linux` 或 `macos`（這台機器的 OS，給部署腳本檢查用）
+- `NEMOCLAW_AGENT`：`hermes`、`openclaw`、或 `langchain-deepagents-code`
+- `NEMOCLAW_PROVIDER`：本機 Compose Ollama 用 `ollama`；雲端用 `build`、`openai`、`anthropic`、`openrouter`、`gemini`
+- `NEMOCLAW_MODEL`：本機 Ollama tag（例如 `qwen2.5:3b`）。同一台機器上的 sandbox 共用這顆 LLM
+- `NEMOCLAW_YES=1`：非互動 onboard 時允許下載模型
+- `NEMOCLAW_SANDBOX_NAME`：小寫、字母開頭，只含字母、數字、連字號
+- `NEMOCLAW_POLICY_TIER`、`NEMOCLAW_WEB_SEARCH_PROVIDER`
+- `DISCORD_SERVER_ID`：Discord Server ID（snowflake）。設了之後 onboard 會開 Discord，並要求 `secrets.env` 裡的 `DISCORD_BOT_TOKEN`
+- 可選 `DISCORD_REQUIRE_MENTION`（預設在有 server id 時為 `1`）、`DISCORD_USER_ID`
+- 可選 `NEMOCLAW_INSTALL_REF`：覆寫 `NEMOCLAW_VERSION` 的 SHA
+
+Provider 與本機必填金鑰（寫在 `personal_config/<user>/secrets.env`，不要寫進 `config.env`）：
+
+- `build` / `routed` → `NVIDIA_INFERENCE_API_KEY`
+- `openai` → `OPENAI_API_KEY`
+- `anthropic` → `ANTHROPIC_API_KEY`
+- `openrouter` → `OPENROUTER_API_KEY`
+- `gemini` → `GEMINI_API_KEY`
+- Discord（`DISCORD_SERVER_ID` 有值時）→ `DISCORD_BOT_TOKEN`
+
+## 新機器 / 新使用者 checklist
+
+在目標機器上由該使用者自己做一次。
+
+### 1. 前置
+
+- Linux：Docker Engine + Compose 可用（`docker info` 對部署帳號成功），建議 4+ vCPU、8 GB RAM（16 GB 更好）、20 GB 以上磁碟。
+- macOS：Docker Desktop。OpenShell 資料目錄是 `/var/lib/openshell`（compose 會 `create_host_path`）。
+
+### 2. 本機金鑰
+
+```bash
+cp personal_config/secrets.env.example personal_config/<user>/secrets.env
+chmod 600 personal_config/<user>/secrets.env
+```
+
+用編輯器填入該使用者 `config.env` 對應的 key。不要把填好的檔案 commit 回去。本機 Ollama 且沒開 Discord 可以不建這個檔。
+
+### 3. Self-hosted runner
+
+在 GitHub repo：Settings → Actions → Runners → New self-hosted runner。依該機器 OS 安裝，labels 設為：
+
+```text
+nemoclaw,<username>
+```
+
+例如 chalmers 機器：`nemoclaw,chalmers`。registration token 只在這台機器用一次，不要進 git。
+
+Runner 對這個 repo 有完整機器權限，只裝在可信的 chalmers / cliff 機器上。
+
+### 4. GitHub Environment
+
+Settings → Environments → 建立與使用者同名的 environment（`chalmers`、`cliff`）。可加 required reviewers。**Secrets 留空。**
+
+### 5. 之後都從 Actions 部署
+
+不必再把金鑰貼到 CI。
+
+## 用 GitHub Actions 指定機器部署
+
+1. 開 repo 的 **Actions** → **Deploy NemoClaw** → **Run workflow**
+2. `target` 選 `poc`、`chalmers` 或 `cliff`
+3. `action` 選：
+   - `onboard`：`compose up --build` 並建立 / 重建 sandbox
+   - `upgrade`：用 pin 的 SHA 重裝 controller 裡的 NemoClaw CLI，並檢查 sandbox 升級
+4. 在 **Deployments** 看到對應 environment 的紀錄
+
+健康檢查：Actions → **Status NemoClaw** → 選同一台機器。只會報 healthy / unhealthy，**不會**把 dashboard URL 或 gateway token 印進 log。
+
+同一台機器的 deploy / status 不會並行（concurrency group `nemoclaw-<target>`）。
+
+### 本機手動跑（除錯用）
+
+在目標機器、repo checkout 裡：
+
+```bash
+bash ./scripts/deploy.sh poc onboard
+bash ./scripts/status.sh poc
+```
+
+長時間 onboard 若走 SSH 而不是 Actions，請在 `tmux` 裡跑，避免斷線中斷安裝：
+
+```bash
+tmux new-session -s nemoclaw-onboard
+bash ./scripts/deploy.sh chalmers onboard
+# Ctrl-b, d 離開；之後 tmux attach-session -t nemoclaw-onboard
+```
+
+## 旋轉金鑰
+
+1. 在該機器改 `personal_config/<user>/secrets.env`
+2. 再跑一次 **Deploy NemoClaw** / `onboard`（對齊官方 credential rotation：新 key 經環境變數進 onboard，註冊到 OpenShell gateway）
+3. 不要把舊 key 留在 shell history；部署腳本結束會 unset 已載入的變數
+
+## 重開機後恢復
+
+Compose 服務設了 `restart: unless-stopped`。Docker 起來之後：
+
+```bash
+sudo systemctl start docker   # Linux
+docker info
+bash ./scripts/status.sh <user>
+```
+
+若 stack 沒在跑：
+
+```bash
+bash ./scripts/deploy.sh <user> onboard
+```
+
+若 status 說 sandbox 存在但停了：
+
+```bash
+docker compose -f compose/docker-compose.yml --project-directory compose exec nemoclaw \
+  nemoclaw <sandbox-name> start
+```
+
+仍不健康時依 CLI 提示 `recover`。sandbox 容器不見了只能重建：`onboard`（舊 workspace 需另有備份才能還原）。
+
+## Dashboard（不要對外開 port）
+
+Gateway 與 dashboard 預設綁 `127.0.0.1`。從筆電 SSH tunnel，不要把 dashboard port 開到公網：
+
+```bash
+ssh -N -L 18789:127.0.0.1:18789 <user>@<host>
+```
+
+在**該機器的終端**取 URL（不要貼進 GitHub log 或聊天）：
+
+```bash
+docker compose -f compose/docker-compose.yml --project-directory compose exec nemoclaw \
+  nemoclaw <sandbox-name> dashboard-url --quiet
+```
+
+NemoClaw 可能改用 `18789`–`18799` 的下一個空 port；以 `dashboard-url` 印出的為準。
+
+## 故障
+
+- Onboard 中斷：注入同一組本機金鑰後再跑 `bash ./scripts/deploy.sh <user> onboard`。不要隨便加 `--fresh`，那會丟已存的非機密選擇。
+- `status` 失敗：先看 compose 是否在跑，再看 `nemoclaw <sandbox-name> status` 的 failure layer。
+- 不要把 dashboard URL、gateway token、API key 貼進 issue、PR 或 Actions 註解。
+
+官方 pin 在 [`NEMOCLAW_VERSION`](NEMOCLAW_VERSION) 與 [`OPENSHELL_VERSION`](OPENSHELL_VERSION)。更新時改這兩個檔案，不要用 `latest` / `lkg` 當長期伺服器來源。
+
+## 新增一位使用者
+
+1. 新增 `personal_config/<name>/config.env`
+2. 在 GitHub 建同名 Environment
+3. 在該機器裝 self-hosted runner，labels：`nemoclaw,<name>`
+4. 在 `.github/workflows/deploy.yml` 與 `status.yml` 的 `target` choice 加上 `<name>`
+5. 在該機器建立 `personal_config/<name>/secrets.env`（沒有 API key / bot token 可省略）

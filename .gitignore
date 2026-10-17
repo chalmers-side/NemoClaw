@@ -218,3 +218,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# NemoClaw machine-local secrets (never commit)
+secrets.env
+**/secrets.env
+*.secrets.env
+
+# GitHub Actions self-hosted runner state if extracted in-repo
+.runner
+.credentials
+.credentials_rsaparams
+actions-runner/
+
+# Gateway / host tokens that must stay on the machine
+*gateway-token*
+*.pem
+*.key
+!*.key.example

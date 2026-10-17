@@ -1,0 +1,131 @@
+# NemoClaw machine stack. One compose file is the deploy unit.
+#
+# Long-running services:
+#   init      — one-shot JWT certs for the OpenShell gateway
+#   gateway   — official NVIDIA OpenShell gateway (Docker-outside-of-Docker)
+#   ollama    — shared local LLM
+#   nemoclaw  — NemoClaw CLI / onboard / inference proxy
+#
+# Sandbox containers are created by the gateway via the host Docker socket.
+# They are siblings, not compose services.
+
+name: nemoclaw
+
+x-openshell-data: &openshell-data
+  type: bind
+  source: /var/lib/openshell
+  target: /var/lib/openshell
+  bind:
+    create_host_path: true
+
+services:
+  init:
+    image: ghcr.io/nvidia/openshell/gateway:${OPENSHELL_IMAGE_TAG:-0.0.116}
+    user: "0"
+    restart: "no"
+    command: ["generate-certs", "--output-dir", "/var/lib/openshell/tls"]
+    environment:
+      HOME: /var/lib/openshell
+    volumes:
+      - *openshell-data
+
+  gateway:
+    image: ghcr.io/nvidia/openshell/gateway:${OPENSHELL_IMAGE_TAG:-0.0.116}
+    container_name: nemoclaw-gateway
+    restart: unless-stopped
+    user: "0"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    # Clear image CMD so gateway.toml owns bind addresses.
+    command: []
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "host.openshell.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${OPENSHELL_PORT:-8080}:8080"
+      - "127.0.0.1:${OPENSHELL_HEALTH_PORT:-8081}:8081"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - *openshell-data
+      - type: bind
+        source: ./gateway.toml
+        target: /etc/openshell/gateway.toml
+        read_only: true
+    environment:
+      OPENSHELL_GATEWAY_CONFIG: /etc/openshell/gateway.toml
+      OPENSHELL_DB_URL: "sqlite:/var/lib/openshell/gateway.db?mode=rwc"
+      XDG_DATA_HOME: /var/lib/openshell
+      HOME: /var/lib/openshell
+    networks:
+      - nemoclaw
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nemoclaw-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+      OLLAMA_CONTEXT_LENGTH: "64000"
+    volumes:
+      - ${HOME}/.ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 15s
+    networks:
+      - nemoclaw
+
+  nemoclaw:
+    build:
+      context: ./nemoclaw
+      args:
+        OPENSHELL_VERSION: ${OPENSHELL_VERSION:-v0.0.116}
+    image: nemoclaw-controller:${NEMOCLAW_INSTALL_REF:-local}
+    container_name: nemoclaw-cli
+    restart: unless-stopped
+    init: true
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_started
+      ollama:
+        condition: service_healthy
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "host.openshell.internal:host-gateway"
+    ports:
+      - "127.0.0.1:11435:11435"
+      - "127.0.0.1:18789:18789"
+    env_file:
+      - path: ../personal_config/${NEMOCLAW_TARGET}/config.env
+        required: true
+      - path: ../personal_config/${NEMOCLAW_TARGET}/secrets.env
+        required: false
+    environment:
+      NEMOCLAW_ACTION: ${NEMOCLAW_ACTION:-serve}
+      NEMOCLAW_INSTALL_REF: ${NEMOCLAW_INSTALL_REF}
+      NEMOCLAW_NON_INTERACTIVE: "1"
+      NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE: "1"
+      NEMOCLAW_DEFER_OPENSHELL_INSTALL: "1"
+      NEMOCLAW_OPENSHELL_BIN: /usr/local/bin/openshell
+      HOME: /root
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - *openshell-data
+      - nemoclaw-home:/root
+    networks:
+      - nemoclaw
+
+volumes:
+  nemoclaw-home:
+
+networks:
+  nemoclaw:
+    name: nemoclaw

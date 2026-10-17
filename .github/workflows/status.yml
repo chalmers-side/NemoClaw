@@ -1,0 +1,35 @@
+name: Status NemoClaw
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Machine to check (personal_config directory name)
+        required: true
+        type: choice
+        options:
+          - poc
+          - chalmers
+          - cliff
+
+concurrency:
+  group: nemoclaw-${{ inputs.target }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    name: Status ${{ inputs.target }}
+    runs-on: [self-hosted, nemoclaw, ${{ inputs.target }}]
+    environment: ${{ inputs.target }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Status
+        run: bash ./scripts/status.sh "$TARGET"
+        env:
+          TARGET: ${{ inputs.target }}
