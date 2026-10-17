@@ -87,9 +87,9 @@ enable_providers_v2() {
 # pendingRouteReservation, so this leaves it in place. Do not use
 # `sandbox destroy`: that also removes the Hermes state volume.
 clear_unfinished_route_reservation() {
-  local registry="${HOME}/.nemoclaw/sandboxes.json"
+  local registry="${HOME}/.nemoclaw/sandboxes.json" removed
   [[ -f "$registry" ]] || return 0
-  python3 - "$registry" "$NEMOCLAW_SANDBOX_NAME" <<'PY'
+  removed="$(python3 - "$registry" "$NEMOCLAW_SANDBOX_NAME" <<'PY'
 import json, sys
 path, name = sys.argv[1], sys.argv[2]
 with open(path) as handle:
@@ -109,7 +109,10 @@ with open(path, "w") as handle:
     handle.write("\n")
 print(f"removed pending route reservation for {name}")
 PY
-  openshell sandbox delete -g nemoclaw "$NEMOCLAW_SANDBOX_NAME" || true
+)"
+  if [[ "$removed" == removed\ pending\ route\ reservation* ]]; then
+    openshell sandbox delete -g nemoclaw "$NEMOCLAW_SANDBOX_NAME" || true
+  fi
 }
 
 host_onboard_failure() {
@@ -162,6 +165,22 @@ host_onboard_resume_only() {
     --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
     rm -f "$log"
     return 0
+  fi
+  if grep -q "Could not resolve the OpenShell native home/workspace" "$log" \
+    && grep -q "sandbox is not ready" "$log"; then
+    printf 'sandbox %s is not ready, so there is no workspace to back up\n' \
+      "$NEMOCLAW_SANDBOX_NAME"
+    if NEMOCLAW_RECREATE_WITHOUT_BACKUP=1 host_nemoclaw_cmd onboard \
+      --non-interactive \
+      --yes-i-accept-third-party-software \
+      --yes \
+      --fresh \
+      --no-ollama-autostart \
+      --agent "$NEMOCLAW_AGENT" \
+      --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
+      rm -f "$log"
+      return 0
+    fi
   fi
   host_onboard_failure "$log"
 }
