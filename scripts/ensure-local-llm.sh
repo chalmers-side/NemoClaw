@@ -145,7 +145,11 @@ install_ollama_auth_proxy_agent() {
   script="${ROOT}/scripts/ollama-auth-proxy-agent.sh"
   [[ -f "$script" ]] || die "missing ${script}"
   chmod 755 "$script"
-  [[ -f "${HOME}/.nemoclaw/ollama-proxy-token" ]] || die "missing ${HOME}/.nemoclaw/ollama-proxy-token"
+  mkdir -p "${HOME}/.nemoclaw"
+  if [[ ! -f "${HOME}/.nemoclaw/ollama-proxy-token" ]]; then
+    umask 077
+    openssl rand -hex 32 >"${HOME}/.nemoclaw/ollama-proxy-token"
+  fi
   chmod 600 "${HOME}/.nemoclaw/ollama-proxy-token" || true
   [[ -f "${HOME}/.nemoclaw/source/scripts/ollama-auth-proxy.mts" ]] ||
     die "missing ${HOME}/.nemoclaw/source/scripts/ollama-auth-proxy.mts"
