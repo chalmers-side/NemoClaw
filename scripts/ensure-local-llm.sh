@@ -122,7 +122,7 @@ ensure_local_llm() {
     stop_compose_ollama
     start_host_ollama
   fi
-  for i in $(seq 1 30); do
+  for i in $(seq 1 60); do
     if ollama_http_ok; then
       pull_model
       return 0
@@ -130,7 +130,7 @@ ensure_local_llm() {
     sleep 2
   done
   if ollama_on_host; then
-    die "host Ollama did not become ready on 127.0.0.1:11434"
+    die "host Ollama did not become ready on 127.0.0.1:11434. $(tail -n 30 "${HOME}/Library/Logs/nemoclaw-ollama.log" 2>/dev/null || true)"
   fi
   run_compose logs --tail 80 ollama >&2 || true
   die "Compose Ollama did not become ready on 127.0.0.1:11434"

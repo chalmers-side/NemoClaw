@@ -32,6 +32,11 @@ KNOWN_SECRET_VARS=(
 
 die() {
   printf 'error: %s\n' "$*" >&2
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    local msg="${*//$'\n'/ }"
+    msg="${msg//%/%%}"
+    printf '::error::%s\n' "$msg"
+  fi
   exit 1
 }
 
@@ -295,6 +300,11 @@ ensure_homebrew_openshell_gateway() {
 <dict>
   <key>Label</key>
   <string>com.nemoclaw.openshell-gateway</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:${HOME}/.docker/bin:/usr/bin:/bin</string>
+  </dict>
   <key>ProgramArguments</key>
   <array>
     <string>${gw}</string>
@@ -325,7 +335,7 @@ EOF
     esac
     sleep 1
   done
-  die "OpenShell gateway did not answer on 127.0.0.1:8080"
+  die "OpenShell gateway did not answer on 127.0.0.1:8080. $(tail -n 30 "${HOME}/Library/Logs/nemoclaw-openshell-gateway.log" 2>/dev/null || true)"
 }
 
 # Print the current Docker Desktop size. Does not change it.
