@@ -73,6 +73,10 @@ ensure_host_nemohermes() {
     || die "nemohermes install finished but the binary is not on PATH"
 }
 
+enable_providers_v2() {
+  openshell settings set -g nemoclaw --global --key providers_v2_enabled --value true --yes
+}
+
 host_onboard_failure() {
   local log="$1" reason
   {
@@ -109,6 +113,7 @@ host_onboard_resume_only() {
     fi
   fi
   printf 'onboarding %s with --resume\n' "$NEMOCLAW_SANDBOX_NAME"
+  enable_providers_v2 || true
   if host_nemoclaw_cmd onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
@@ -126,6 +131,21 @@ host_onboard_resume_only() {
       --non-interactive \
       --yes-i-accept-third-party-software \
       --yes \
+      --no-ollama-autostart \
+      --agent "$NEMOCLAW_AGENT" \
+      --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
+      rm -f "$log"
+      return 0
+    fi
+  fi
+  if grep -q "providers_v2_enabled=true" "$log"; then
+    printf 'enabling providers_v2 on gateway nemoclaw\n'
+    enable_providers_v2 || host_onboard_failure "$log"
+    if host_nemoclaw_cmd onboard \
+      --non-interactive \
+      --yes-i-accept-third-party-software \
+      --yes \
+      --resume \
       --no-ollama-autostart \
       --agent "$NEMOCLAW_AGENT" \
       --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
