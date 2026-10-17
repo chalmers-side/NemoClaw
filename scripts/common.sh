@@ -256,31 +256,68 @@ EOF
 }
 
 ensure_homebrew_openshell_gateway() {
-  command -v brew >/dev/null || die "Homebrew is required for the macOS OpenShell gateway"
-  local uid i code
+  local uid i code gw bin_dir work
   uid="$(id -u)"
-  # brew tap uses the login keychain. A LaunchAgent gets errSecInteractionNotAllowed
-  # (-25308). Global git config can still force a GitHub username, and the runner
-  # has no tty ("Device not configured"). Ignore system and global git config.
-  if ! brew tap | grep -qx 'nvidia/openshell'; then
-    local tap_dest
-    tap_dest="$(brew --repository)/Library/Taps/nvidia/homebrew-openshell"
-    rm -rf "$tap_dest"
-    mkdir -p "$(dirname "$tap_dest")"
-    GIT_CONFIG_NOSYSTEM=1 \
-    GIT_CONFIG_GLOBAL=/dev/null \
-    GIT_TERMINAL_PROMPT=0 \
-      git -c credential.helper='!true' clone --origin=origin \
-        https://github.com/nvidia/homebrew-openshell "$tap_dest"
-    git -C "$tap_dest" config --local credential.helper '!true'
+  bin_dir="${HOME}/.nemoclaw/openshell/bin"
+  if [[ -x /opt/homebrew/bin/openshell-gateway ]]; then
+    gw=/opt/homebrew/bin/openshell-gateway
+  else
+    gw="${bin_dir}/openshell-gateway"
   fi
-  # Newer Homebrew refuses third-party formulae until the tap is trusted.
-  brew trust nvidia/openshell >/dev/null 2>&1 || true
-  if ! brew list --formula openshell >/dev/null 2>&1; then
-    brew install nvidia/openshell/openshell
+  if [[ ! -x "$gw" || ! -x "$(dirname "$gw")/openshell" ]]; then
+    # github.com/nvidia/homebrew-openshell answers 401 without a login, so brew tap
+    # cannot run from the Actions agent. The release tarballs are public.
+    mkdir -p "$bin_dir"
+    work="$(mktemp -d)"
+    curl -fsSL -L -o "${work}/openshell.tar.gz" \
+      "https://github.com/NVIDIA/OpenShell/releases/download/v0.0.116/openshell-aarch64-apple-darwin.tar.gz" \
+      || die "failed to download OpenShell CLI"
+    curl -fsSL -L -o "${work}/gateway.tar.gz" \
+      "https://github.com/NVIDIA/OpenShell/releases/download/v0.0.116/openshell-gateway-aarch64-apple-darwin.tar.gz" \
+      || die "failed to download OpenShell gateway"
+    printf '%s  %s\n' "e582f2374053bebac8e6aaeb4a369931b7d4bb97bd55055e2c02e85502627e22" "${work}/openshell.tar.gz" | shasum -a 256 -c - \
+      || die "OpenShell CLI checksum mismatch"
+    printf '%s  %s\n' "f192d3d737c125264e13ef73458541df2ca6a9eb2fa599736a7f2587d5d2ce8d" "${work}/gateway.tar.gz" | shasum -a 256 -c - \
+      || die "OpenShell gateway checksum mismatch"
+    tar -xzf "${work}/openshell.tar.gz" -C "$bin_dir"
+    tar -xzf "${work}/gateway.tar.gz" -C "$bin_dir"
+    chmod 755 "${bin_dir}/openshell" "${bin_dir}/openshell-gateway"
+    rm -rf "$work"
+    gw="${bin_dir}/openshell-gateway"
   fi
-  brew services start openshell || die "failed to start Homebrew openshell"
-  launchctl enable "gui/${uid}/sh.brew.openshell" >/dev/null 2>&1 || true
+  export PATH="$(dirname "$gw"):${PATH}"
+  local plist="${HOME}/Library/LaunchAgents/com.nemoclaw.openshell-gateway.plist"
+  mkdir -p "${HOME}/Library/LaunchAgents" "${HOME}/Library/Logs"
+  cat >"$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nemoclaw.openshell-gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${gw}</string>
+    <string>--bind-address</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8080</string>
+    <string>--disable-tls</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${HOME}/Library/Logs/nemoclaw-openshell-gateway.log</string>
+  <key>StandardErrorPath</key>
+  <string>${HOME}/Library/Logs/nemoclaw-openshell-gateway.log</string>
+</dict>
+</plist>
+EOF
+  launchctl bootout "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/${uid}" "$plist" || die "failed to bootstrap com.nemoclaw.openshell-gateway"
+  launchctl enable "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
   for i in $(seq 1 30); do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:8080/ || true)"
     case "$code" in
@@ -288,7 +325,7 @@ ensure_homebrew_openshell_gateway() {
     esac
     sleep 1
   done
-  die "Homebrew OpenShell gateway did not answer on 127.0.0.1:8080"
+  die "OpenShell gateway did not answer on 127.0.0.1:8080"
 }
 
 # Print the current Docker Desktop size. Does not change it.
