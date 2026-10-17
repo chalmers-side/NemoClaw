@@ -1,6 +1,6 @@
 # NemoClaw
 
-Ops repo for per-user NVIDIA NemoClaw deploys. Not an upstream fork. PoC target is `personal_config/poc` (`poc-claw`, Hermes, Ollama `qwen3:4b`). Actions for `poc` run on `runs-on: [self-hosted, macOS, ARM64]`.
+Ops repo for per-user NVIDIA NemoClaw deploys. Not an upstream fork. PoC target is `personal_config/poc` (`poc-claw`, Hermes, Ollama `qwen3:4b`). Actions for `poc` run on `runs-on: [self-hosted, macOS, ARM64, chalmers-macmini-node-1]`.
 
 ## GOTCHA
 
@@ -39,4 +39,4 @@ Ops repo for per-user NVIDIA NemoClaw deploys. Not an upstream fork. PoC target 
 - Cluster route that makes `inference.local` eligible: create an `openai` provider whose base URL is `http://127.0.0.1:11435/v1` and whose key is the contents of `~/.nemoclaw/ollama-proxy-token`, then `openshell inference set` for both the user route and `--system`, then `openshell sandbox provider attach`. Reuse an existing provider name if one is already there. `scripts/common.sh` does this in `ensure_openshell_openai_inference`.
 - Before status or connect, `repair_sandbox_openshell_hosts` strips sandbox IPv6 `host.openshell.internal` lines and writes the gai.conf marker. `ensure_hermes_discord_platform` flips a disabled Discord platform and recovers the gateway.
 - Green check on this Mac, from the host CLI: `nemohermes poc-claw status` shows Inference healthy at `http://host.openshell.internal:11435/v1/chat/completions`, and `nemohermes poc-claw connect --probe-only` ends `result=ready`. Discord bot name on this PoC is `chalmers-assistant-poc`.
-- The original M4 laptop PoC was stopped with `openshell sandbox stop poc-claw`, `brew services stop openshell`, and `launchctl disable` for `sh.brew.openshell` and `com.nemoclaw.ollama`. The `:11435` auth proxy was killed. Those two LaunchAgents stay disabled across login. `poc` deploy and status now use `runs-on: [self-hosted, macOS, ARM64]`; `chalmers` and `cliff` stay on `nemoclaw,<user>`.
+- The original M4 laptop PoC was stopped with `openshell sandbox stop poc-claw`, `brew services stop openshell`, and `launchctl disable` for `sh.brew.openshell` and `com.nemoclaw.ollama`. The `:11435` auth proxy was killed. Those two LaunchAgents stay disabled across login. `poc` deploy and status now use `runs-on: [self-hosted, macOS, ARM64, chalmers-macmini-node-1]`; `chalmers` and `cliff` stay on `nemoclaw,<user>`. The Mac mini runner's extra label is `chalmers-macmini-node-1`.

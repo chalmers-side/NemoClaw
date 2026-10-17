@@ -22,7 +22,7 @@ GitHub Actions (選機器)
         │
         ▼
   self-hosted runner
-    poc: self-hosted, macOS, ARM64
+    poc: self-hosted, macOS, ARM64, chalmers-macmini-node-1
     others: nemoclaw,<user>
         │
         ├─ personal_config/<user>/config.env    ← git
@@ -40,11 +40,11 @@ GitHub Actions (選機器)
 
 每次部署在 GitHub 選一台機器。Job 只跑在該使用者的 self-hosted runner 上，所以金鑰不必離開那台機器。
 
-`poc` 用 `personal_config/poc/`，Actions 跑在 labels 為 `self-hosted`, `macOS`, `ARM64` 的 runner 上。agent 在 `config.env` 切換。macOS 的共用 LLM 是本機 Ollama，不需要 cloud API key。
+`poc` 用 `personal_config/poc/`，Actions 跑在 labels 為 `self-hosted`, `macOS`, `ARM64`, `chalmers-macmini-node-1` 的 runner 上。agent 在 `config.env` 切換。macOS 的共用 LLM 是本機 Ollama，不需要 cloud API key。
 
 ## macOS PoC（poc）
 
-`poc` 的 deploy / status 跑在 `runs-on: [self-hosted, macOS, ARM64]`。在那台機器的 checkout 裡，步驟與下面相同：
+`poc` 的 deploy / status 跑在 `runs-on: [self-hosted, macOS, ARM64, chalmers-macmini-node-1]`。在那台機器的 checkout 裡，步驟與下面相同：
 
 1. 打開 **Docker Desktop**，等到 `docker info` 成功
 2. 編輯 [`personal_config/poc/config.env`](personal_config/poc/config.env)：
@@ -156,7 +156,7 @@ chmod 600 personal_config/<user>/secrets.env
 nemoclaw,<username>
 ```
 
-例如 chalmers 機器：`nemoclaw,chalmers`。`poc` 不用這組 label，它的 runner 要有 `self-hosted`、`macOS`、`ARM64`。registration token 只在該機器用一次，不要進 git。
+例如 chalmers 機器：`nemoclaw,chalmers`。`poc` 不用這組 label，它的 runner 要有 `self-hosted`、`macOS`、`ARM64`、`chalmers-macmini-node-1`。registration token 只在該機器用一次，不要進 git。
 
 Runner 對這個 repo 有完整機器權限，只裝在可信的 chalmers / cliff 機器上。
 
@@ -171,7 +171,7 @@ Settings → Environments → 建立與使用者同名的 environment（`chalmer
 ## 用 GitHub Actions 指定機器部署
 
 1. 開 repo 的 **Actions** → **Deploy NemoClaw** → **Run workflow**
-2. `target` 選 `poc`、`chalmers` 或 `cliff`。`poc` 只會被 `self-hosted, macOS, ARM64` 那台 runner 接走
+2. `target` 選 `poc`、`chalmers` 或 `cliff`。`poc` 只會被 `chalmers-macmini-node-1` 那台 runner 接走
 3. `action` 選：
    - `onboard`：`compose up --build` 並建立 / 重建 sandbox
    - `upgrade`：用 pin 的 SHA 重裝 controller 裡的 NemoClaw CLI，並檢查 sandbox 升級

@@ -36,8 +36,8 @@ jobs:
   deploy:
     name: Deploy ${{ inputs.target || 'poc' }}
     # Push to main or feature* deploys poc. A manual run still picks the target.
-    # poc runs on the macOS ARM64 self-hosted runner. Other targets stay on nemoclaw,<user>.
-    runs-on: ${{ fromJSON((inputs.target || 'poc') == 'poc' && '["self-hosted", "macOS", "ARM64"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target || 'poc')) }}
+    # poc runs on the Mac mini runner. Other targets stay on nemoclaw,<user>.
+    runs-on: ${{ fromJSON((inputs.target || 'poc') == 'poc' && '["self-hosted", "macOS", "ARM64", "chalmers-macmini-node-1"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target || 'poc')) }}
     environment: ${{ inputs.target || 'poc' }}
     timeout-minutes: 120
     steps:
