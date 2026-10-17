@@ -76,6 +76,8 @@ ensure_host_nemohermes() {
 host_onboard_resume_only() {
   local log
   log="$(mktemp)"
+  mkdir -p "${HOME}/.nemoclaw"
+  chmod 700 "${HOME}/.nemoclaw"
   printf 'onboarding %s with --resume\n' "$NEMOCLAW_SANDBOX_NAME"
   if host_nemoclaw_cmd onboard \
     --non-interactive \
