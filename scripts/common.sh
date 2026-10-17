@@ -185,6 +185,29 @@ validate_secrets() {
   fi
 }
 
+# OpenShell's L7 proxy resolves host.openshell.internal on the gateway host
+# and checks allowed_ips (RFC1918). Docker Desktop extra_hosts only exist
+# inside sandbox containers, so a native macOS gateway gets ssrf_denied
+# unless this name resolves locally to a loopback RFC1918 alias.
+MACOS_OPENSHELL_BRIDGE_IP="${MACOS_OPENSHELL_BRIDGE_IP:-10.255.255.254}"
+
+ensure_macos_host_openshell_internal() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  local ip="$MACOS_OPENSHELL_BRIDGE_IP"
+  local name="host.openshell.internal"
+  if ! ifconfig lo0 2>/dev/null | grep -q "inet ${ip} "; then
+    if ! sudo -n ifconfig lo0 alias "$ip" netmask 255.255.255.255 2>/dev/null; then
+      die "macOS needs loopback alias ${ip} for ${name}. Run: sudo ifconfig lo0 alias ${ip} netmask 255.255.255.255"
+    fi
+  fi
+  if ! grep -Eq "^${ip}[[:space:]]+${name}([[:space:]]|$)" /etc/hosts 2>/dev/null; then
+    if ! printf '%s\t%s\t# nemoclaw-host-openshell-internal\n' "$ip" "$name" | sudo -n tee -a /etc/hosts >/dev/null; then
+      die "macOS needs /etc/hosts entry '${ip} ${name}'. Add it, then rerun."
+    fi
+  fi
+  dscacheutil -flushcache >/dev/null 2>&1 || true
+}
+
 preflight_host() {
   export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
   command -v docker >/dev/null || die "docker is required"
@@ -194,6 +217,7 @@ preflight_host() {
     if ! docker info >/dev/null 2>&1; then
       die "Docker Desktop is not running. Open it, wait until docker info works, then rerun."
     fi
+    ensure_macos_host_openshell_internal
   fi
   [[ -f "$COMPOSE_FILE" ]] || die "missing ${COMPOSE_FILE}"
 }
@@ -206,6 +230,11 @@ cli_name() {
   esac
 }
 
+compose_project_name() {
+  # Docker Compose rejects uppercase in -p / name:.
+  printf 'nemoclaw-%s\n' "${TARGET:?}"
+}
+
 export_compose_env() {
   export NEMOCLAW_TARGET="${TARGET:?}"
   export NEMOCLAW_ACTION="${NEMOCLAW_ACTION:-serve}"
@@ -213,18 +242,32 @@ export_compose_env() {
   export OPENSHELL_VERSION
   export OPENSHELL_IMAGE_TAG
   export HOME
+  COMPOSE_PROJECT_NAME="$(compose_project_name)"
+  export COMPOSE_PROJECT_NAME
 }
 
 run_compose() {
   export_compose_env
   mkdir -p "${HOME}/.ollama"
+  local project
+  project="$(compose_project_name)"
   if docker compose version >/dev/null 2>&1; then
-    docker compose -f "$COMPOSE_FILE" --project-directory "${ROOT}/compose" "$@"
+    docker compose -p "$project" -f "$COMPOSE_FILE" --project-directory "${ROOT}/compose" "$@"
   elif command -v docker-compose >/dev/null; then
-    docker-compose -f "$COMPOSE_FILE" --project-directory "${ROOT}/compose" "$@"
+    docker-compose -p "$project" -f "$COMPOSE_FILE" --project-directory "${ROOT}/compose" "$@"
   else
     die "docker compose is required (Docker Desktop Compose plugin or docker-compose)"
   fi
+}
+
+# Docker Desktop's Linux VM cannot see the Mac GPU. On macOS the shared
+# Ollama runs as a host LaunchAgent so Metal can serve qwen3:4b.
+ollama_on_host() {
+  [[ "${OS:-}" == "macos" ]] || return 1
+  case "${NEMOCLAW_PROVIDER:-}" in
+    ollama | install-ollama | custom) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 listener_pids() {
@@ -232,12 +275,17 @@ listener_pids() {
 }
 
 is_docker_listener() {
-  local comm
+  local comm cmd
   comm="$(ps -p "$1" -o comm= 2>/dev/null || true)"
+  comm="${comm##*/}"
   case "$comm" in
     docker | docker-proxy | com.docker* | vpnkit) return 0 ;;
-    *) return 1 ;;
   esac
+  cmd="$(ps -p "$1" -o command= 2>/dev/null || true)"
+  case "$cmd" in
+    *Docker.app* | *com.docker* | *docker-proxy*) return 0 ;;
+  esac
+  return 1
 }
 
 stop_host_listener() {
@@ -262,35 +310,168 @@ stop_host_listener() {
   done
 }
 
+compose_ports() {
+  local port
+  for port in 8080 8081 11434 11435 18789; do
+    if ollama_on_host && [[ "$port" == "11434" ]]; then
+      continue
+    fi
+    printf '%s\n' "$port"
+  done
+}
+
 free_compose_ports() {
   local port i pids still_host pid
-  for port in 8080 8081 11434 11435 18789; do
+  while IFS= read -r port; do
     stop_host_listener "$port"
-  done
+  done < <(compose_ports)
   for i in 1 2 3 4 5 6 7 8 9 10; do
     still_host=0
-    for port in 8080 8081 11434 11435 18789; do
+    while IFS= read -r port; do
       pids="$(listener_pids "$port")"
       for pid in $pids; do
         if ! is_docker_listener "$pid"; then
           still_host=1
         fi
       done
-    done
+    done < <(compose_ports)
     [[ "$still_host" -eq 0 ]] && return 0
     sleep 1
   done
-  die "compose ports are still held by host processes; quit Homebrew OpenShell/Ollama and rerun"
+  die "compose ports are still held by host processes; quit Homebrew OpenShell and rerun"
 }
 
 nemoclaw_cmd() {
   run_compose exec -T nemoclaw "$(cli_name)" "$@"
 }
 
+# Docker Desktop extra_hosts maps host.openshell.internal to IPv4 and IPv6.
+# OpenShell's L7 proxy prefers the IPv6 ULA, which is not in the IPv4
+# allowed_ips CIDRs, so inference returns ssrf_denied / HTTP 503.
+repair_sandbox_openshell_hosts() {
+  local cid
+  cid="$(docker ps --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" --format '{{.ID}}' | head -1)"
+  [[ -n "$cid" ]] || return 0
+  docker exec -u 0 "$cid" python3 - <<'PY'
+from pathlib import Path
+
+hosts = Path("/etc/hosts")
+out = []
+for line in hosts.read_text().splitlines(True):
+    stripped = line.lstrip()
+    if "host.openshell.internal" in line:
+        addr = stripped.split()[0] if stripped.split() else ""
+        if ":" in addr and "." not in addr:
+            continue
+    out.append(line)
+hosts.write_text("".join(out))
+
+# Prefer IPv4 when Docker also injects an IPv6 extra_host.
+# The stock gai.conf comments out this line; match a marker, not the comment.
+gai = Path("/etc/gai.conf")
+existing = gai.read_text() if gai.exists() else ""
+marker = "# nemoclaw-prefer-ipv4"
+if marker not in existing:
+    gai.write_text(existing + f"\n{marker}\nprecedence ::ffff:0:0/96  100\n")
+PY
+}
+
+# Hermes talks to :11435. NemoClaw status still probes https://inference.local
+# unless an openai-type cluster route exists. The NemoClaw local profile type
+# is not eligible for `openshell inference set`.
+ensure_openshell_openai_inference() {
+  command -v openshell >/dev/null || return 0
+  local token_file="${HOME}/.nemoclaw/ollama-proxy-token"
+  local name="nemoclaw-${TARGET}-openai"
+  local model="${NEMOCLAW_MODEL:-}"
+  local base_url existing
+  [[ -n "$model" && -f "$token_file" ]] || return 0
+  existing="$(openshell provider list --names 2>/dev/null | grep -E "^(nemoclaw-${TARGET}-openai|${NEMOCLAW_SANDBOX_NAME}-openai|poc-ollama-openai)$" | head -1 || true)"
+  [[ -n "$existing" ]] && name="$existing"
+  if [[ "${OS:-}" == "macos" ]]; then
+    base_url="http://127.0.0.1:11435/v1"
+  else
+    base_url="http://host.docker.internal:11435/v1"
+  fi
+  if ! openshell provider list --names 2>/dev/null | grep -qx "$name"; then
+    openshell provider create \
+      --name "$name" \
+      --type openai \
+      --credential "OPENAI_API_KEY=$(cat "$token_file")" \
+      --config "OPENAI_BASE_URL=${base_url}" >/dev/null
+  fi
+  if ! openshell inference get 2>/dev/null | grep -q "Provider:"; then
+    openshell inference set --provider "$name" --model "$model" --timeout 90
+    openshell inference set --system --provider "$name" --model "$model" --timeout 90
+  fi
+  openshell sandbox provider attach "$NEMOCLAW_SANDBOX_NAME" "$name" >/dev/null 2>&1 || true
+}
+
+# Onboard can leave platforms.discord.enabled=false after a failed finalization
+# even when DISCORD_BOT_TOKEN is already in the sandbox env.
+ensure_hermes_discord_platform() {
+  [[ -n "${DISCORD_SERVER_ID:-}" ]] || return 0
+  local cid changed
+  cid="$(docker ps --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" --format '{{.ID}}' | head -1)"
+  [[ -n "$cid" ]] || return 0
+  changed="$(docker exec -u sandbox "$cid" python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path("/sandbox/.hermes/config.yaml")
+if not p.exists():
+    print("0")
+    raise SystemExit
+raw = p.read_text()
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    print("0")
+    raise SystemExit
+plat = data.setdefault("platforms", {})
+disc = plat.setdefault("discord", {})
+discord = data.setdefault("discord", {})
+changed = False
+if disc.get("enabled") is not True:
+    disc["enabled"] = True
+    changed = True
+if discord.get("require_mention") is not True:
+    discord["require_mention"] = True
+    discord.setdefault("auto_thread", True)
+    discord.setdefault("reactions", True)
+    changed = True
+if changed:
+    p.write_text(json.dumps(data, indent=2) + "\n")
+    print("1")
+else:
+    print("0")
+PY
+)"
+  [[ "$changed" == "1" ]] || return 0
+  printf 'enabled Hermes Discord platform in %s; recovering gateway\n' "$NEMOCLAW_SANDBOX_NAME"
+  if command -v "$(cli_name)" >/dev/null; then
+    host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null
+  fi
+}
+
+host_nemoclaw_cmd() {
+  local cli
+  cli="$(cli_name)"
+  command -v "$cli" >/dev/null || die "${cli} is not on PATH; install NemoClaw on this machine first"
+  "$cli" "$@"
+}
+
 verify_sandbox() {
   printf 'verifying sandbox %s\n' "$NEMOCLAW_SANDBOX_NAME"
-  nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status
-  nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" connect --probe-only
+  repair_sandbox_openshell_hosts
+  ensure_openshell_openai_inference
+  ensure_hermes_discord_platform
+  if run_compose exec -T nemoclaw true >/dev/null 2>&1; then
+    nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status
+    nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" connect --probe-only
+  else
+    host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status
+    host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" connect --probe-only
+  fi
   printf 'sandbox %s is healthy\n' "$NEMOCLAW_SANDBOX_NAME"
 }
 

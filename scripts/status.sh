@@ -14,8 +14,8 @@ TARGET="${1:-}"
 load_target "$TARGET"
 preflight_host
 
-if ! run_compose exec -T nemoclaw true >/dev/null 2>&1; then
-  die "compose stack is not running. Deploy first: bash ./scripts/deploy.sh ${TARGET} onboard"
+if ! docker ps --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" --format '{{.ID}}' | grep -q .; then
+  die "sandbox is not running. Deploy first: bash ./scripts/deploy.sh ${TARGET} onboard"
 fi
 
 verify_sandbox

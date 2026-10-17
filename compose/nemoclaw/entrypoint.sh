@@ -47,18 +47,26 @@ http_ok() {
   curl -fsS --max-time 2 "$1" >/dev/null 2>&1
 }
 
+# OpenShell's HTTP mux returns 404 on GET /. That still means the gateway is up.
+http_up() {
+  local code
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 "$1" 2>/dev/null || true)"
+  [[ "$code" =~ ^[234][0-9][0-9]$ ]]
+}
+
 pick_upstream() {
   local port="$1"
   local path="${2:-/}"
-  if http_ok "http://127.0.0.1:${port}${path}"; then
+  local probe="${3:-http_up}"
+  if "$probe" "http://127.0.0.1:${port}${path}"; then
     printf '%s\n' "127.0.0.1"
     return 0
   fi
-  if http_ok "http://gateway:${port}${path}"; then
+  if "$probe" "http://gateway:${port}${path}"; then
     printf '%s\n' gateway
     return 0
   fi
-  if http_ok "http://host.docker.internal:${port}${path}"; then
+  if "$probe" "http://host.docker.internal:${port}${path}"; then
     printf '%s\n' host.docker.internal
     return 0
   fi
@@ -98,6 +106,8 @@ prepare_loopback() {
     sleep 2
   done
   [[ -n "$GATEWAY_UPSTREAM" ]] || die "OpenShell gateway is not reachable from this container"
+  # When we share the gateway net/pid namespace, 127.0.0.1:8080 is already
+  # openshell-gateway. Never front it with socat — onboard rejects that owner.
   if [[ "$GATEWAY_UPSTREAM" != "127.0.0.1" ]]; then
     start_socat 8080 "$GATEWAY_UPSTREAM" 8080
     start_socat 8081 "$GATEWAY_UPSTREAM" 8081
@@ -107,7 +117,7 @@ prepare_loopback() {
     ollama | install-ollama | custom)
       log "waiting for Ollama"
       for i in $(seq 1 45); do
-        if OLLAMA_UPSTREAM="$(pick_upstream 11434 /api/version)"; then
+        if OLLAMA_UPSTREAM="$(pick_upstream 11434 /api/version http_ok)"; then
           break
         fi
         if http_ok "http://ollama:11434/api/version"; then
@@ -142,13 +152,42 @@ register_gateway() {
 }
 
 cli_installed() {
-  command -v "$(cli_name)" >/dev/null 2>&1
+  local bin path
+  bin="$(cli_name)"
+  path="$(command -v "$bin" 2>/dev/null || true)"
+  [[ -n "$path" && -x "$path" ]] || return 1
+  "$path" --version >/dev/null 2>&1
+}
+
+repair_cli_shims() {
+  local path
+  if cli_installed; then
+    return 0
+  fi
+  for path in \
+    /root/.local/bin/nemohermes \
+    /root/.local/bin/nemoclaw \
+    /root/.local/bin/nemo-deepagents \
+    /root/.local/bin/nemoclaw-acp
+  do
+    if [[ -e "$path" ]]; then
+      log "removing leftover ${path}"
+      rm -f "$path"
+    fi
+  done
+  hash -r >/dev/null 2>&1 || true
 }
 
 ensure_cli() {
   local stamp="${HOME}/.nemoclaw-compose-ref"
+  repair_cli_shims
   if [[ "$ACTION" != "upgrade" ]] && cli_installed; then
-    if [[ -f "$stamp" ]] && [[ "$(tr -d '[:space:]' <"$stamp")" == "${NEMOCLAW_INSTALL_REF:-}" ]]; then
+    local installed_ref=""
+    if [[ -f "$stamp" ]]; then
+      installed_ref="$(tr -d '[:space:]' <"$stamp")"
+    fi
+    if [[ -z "$installed_ref" || "$installed_ref" == "${NEMOCLAW_INSTALL_REF:-}" ]]; then
+      printf '%s\n' "${NEMOCLAW_INSTALL_REF:-}" >"$stamp"
       return 0
     fi
   fi
@@ -174,6 +213,10 @@ sandbox_ok() {
 
 run_onboard() {
   log "onboarding sandbox ${NEMOCLAW_SANDBOX_NAME}"
+  if cli onboard --non-interactive --yes-i-accept-third-party-software --yes --resume; then
+    return 0
+  fi
+  log "resume failed; running onboard without --resume"
   cli onboard --non-interactive --yes-i-accept-third-party-software --yes
 }
 

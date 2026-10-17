@@ -47,7 +47,7 @@ GitHub Actions (選機器)
 1. 打開 **Docker Desktop**，等到 `docker info` 成功
 2. 編輯 [`personal_config/poc/config.env`](personal_config/poc/config.env)：
    - `NEMOCLAW_AGENT`：`hermes`（預設）、`openclaw`、或 `langchain-deepagents-code`
-   - `NEMOCLAW_MODEL`：共用本機模型。Hermes 需要 native context ≥ 64000，PoC 用 `qwen3:4b`。真 3B（`qwen2.5:3b`）請把 agent 改成 `openclaw`
+   - `NEMOCLAW_MODEL`：共用本機模型。Hermes 需要 native context ≥ 64000，PoC 用 `qwen3.5:9b`。真 3B（`qwen2.5:3b`）請把 agent 改成 `openclaw`
 3. 部署：
 
 ```bash
@@ -55,27 +55,36 @@ bash ./scripts/deploy.sh poc onboard
 bash ./scripts/status.sh poc
 ```
 
-`deploy.sh` 會 `docker compose up --build` 整份 stack，並把模型 pull 進 `nemoclaw-ollama`。等價於在設好 `NEMOCLAW_TARGET` / `NEMOCLAW_INSTALL_REF` 之後自己跑 compose。
+`deploy.sh` 會 `docker compose up --build` 整份 stack。Compose 專案名必須小寫（`nemoclaw-poc`）；容器是 `NemoClaw-<user>-ollama` 這種形式。等價於在設好 `NEMOCLAW_TARGET` / `NEMOCLAW_INSTALL_REF` 之後自己跑 compose。
 
 服務分工：
 
 - **gateway**：`ghcr.io/nvidia/openshell/gateway`，資料在 `/var/lib/openshell`（host 與容器同一路徑，NVIDIA 要求）
-- **Ollama**：`nemoclaw-ollama`，host 只綁 `127.0.0.1:11434`
-- **NemoClaw controller**：`nemoclaw-cli`，負責 onboard、CLI、以及 sandbox 打回的 inference proxy（`127.0.0.1:11435`）
+- **Ollama**：Linux 用 `NemoClaw-<user>-ollama`，host 只綁 `127.0.0.1:11434`。macOS 改跑本機 Ollama（Metal），compose 容器要停掉，否則搶同一個 port
+- **NemoClaw controller**：`NemoClaw-<user>-cli`，負責 onboard、CLI、以及 sandbox 打回的 inference proxy（`127.0.0.1:11435`）
 - **Sandbox**：gateway 建立的 Docker 容器，不列在 compose 裡
 
-不要同時開 Homebrew OpenShell / Homebrew 或桌面版 Ollama，否則會佔走 8080 / 11434。部署腳本會停掉佔 port 的 host process。換 agent 只改 `NEMOCLAW_AGENT` 再 onboard；換模型改 `NEMOCLAW_MODEL` 後再 deploy。
+這台 Mac 的 NemoClaw onboard **不會接受** Docker 發佈在 `:8080` 的 gateway（port owner 會被判成 `com.docker.backend`）。PoC 因此用 Homebrew `openshell-gateway` 聽 `127.0.0.1:8080`。Ollama 也跑在 Mac 本機（LaunchAgent `com.nemoclaw.ollama`），Docker Desktop 的 Linux VM 看不到 M4 GPU。模型仍在 `~/.ollama`，sandbox 還是打 `127.0.0.1:11435` 的 auth proxy。
+
+Docker Desktop 會把 `host.openshell.internal` 同時寫成 IPv4 與 IPv6。OpenShell L7 proxy 走 IPv6 時會 `ssrf_denied`（IPv6 ULA 不在 `allowed_ips`）。`status.sh` / deploy 會把 sandbox `/etc/hosts` 裡的 IPv6 那行拿掉。若還要從 Mac 主機解析這個名字：
+
+```bash
+sudo ifconfig lo0 alias 10.255.255.254 netmask 255.255.255.255
+printf '10.255.255.254\thost.openshell.internal\t# nemoclaw-host-openshell-internal\n' | sudo tee -a /etc/hosts
+```
+
+換 agent 只改 `NEMOCLAW_AGENT` 再 onboard；換模型改 `NEMOCLAW_MODEL` 後再 deploy。
 
 已裝好之後：
 
 ```bash
-docker compose -f compose/docker-compose.yml --project-directory compose exec nemoclaw nemohermes poc-claw status
-docker compose -f compose/docker-compose.yml --project-directory compose exec nemoclaw nemohermes poc-claw connect
+docker compose -p nemoclaw-poc -f compose/docker-compose.yml --project-directory compose exec nemoclaw nemohermes poc-claw status
+docker compose -p nemoclaw-poc -f compose/docker-compose.yml --project-directory compose exec nemoclaw nemohermes poc-claw connect
 ```
 
 或直接 `bash ./scripts/status.sh poc`。
 
-Hermes 官方要求 loaded context ≥ 64000。`qwen2.5:3b` 只有 32k，不能給 Hermes 用；PoC 預設 `qwen3:4b`。要用真 3B 時改：
+Hermes 官方要求 loaded context ≥ 64000。`qwen2.5:3b` 只有 32k，不能給 Hermes 用；PoC 用 `qwen3.5:9b`。要用真 3B 時改：
 
 ```bash
 # personal_config/poc/config.env
@@ -211,7 +220,7 @@ bash ./scripts/deploy.sh <user> onboard
 若 status 說 sandbox 存在但停了：
 
 ```bash
-docker compose -f compose/docker-compose.yml --project-directory compose exec nemoclaw \
+docker compose -p nemoclaw-<user> -f compose/docker-compose.yml --project-directory compose exec nemoclaw \
   nemoclaw <sandbox-name> start
 ```
 
@@ -228,7 +237,7 @@ ssh -N -L 18789:127.0.0.1:18789 <user>@<host>
 在**該機器的終端**取 URL（不要貼進 GitHub log 或聊天）：
 
 ```bash
-docker compose -f compose/docker-compose.yml --project-directory compose exec nemoclaw \
+docker compose -p nemoclaw-<user> -f compose/docker-compose.yml --project-directory compose exec nemoclaw \
   nemoclaw <sandbox-name> dashboard-url --quiet
 ```
 

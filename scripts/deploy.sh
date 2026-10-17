@@ -35,8 +35,13 @@ NEMOCLAW_ACTION="$ACTION"
 export NEMOCLAW_ACTION
 
 printf 'starting compose stack for %s (%s)\n' "$TARGET" "$ACTION"
-run_compose up -d --build init gateway ollama
-ensure_local_llm
+if ollama_on_host; then
+  run_compose up -d --build init gateway
+  ensure_local_llm
+else
+  run_compose up -d --build init gateway ollama
+  ensure_local_llm
+fi
 run_compose up -d --build --force-recreate nemoclaw
 
 wait_for_controller() {

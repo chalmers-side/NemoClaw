@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Copied from NVIDIA OpenShell deploy/docker/gateway.toml (Apache-2.0).
-# Bind paths stay /var/lib/openshell so sibling sandbox containers can
-# reuse the same host bind the gateway uses.
+# Copied from NVIDIA OpenShell v0.1.4 deploy/docker/gateway.toml.
+# Supervisor/sandbox image tags are pinned to 0.1.4 (not latest).
 
 [openshell]
 version = 2
@@ -26,8 +25,8 @@ gateway_id = "openshell-docker"
 
 [openshell.drivers.docker]
 default_image = "nvcr.io/nvidia/base/ubuntu:24.04"
-sandbox_runtime_image = "ghcr.io/nvidia/openshell/sandbox:latest"
-supervisor_image = "ghcr.io/nvidia/openshell/supervisor:latest"
+sandbox_runtime_image = "ghcr.io/nvidia/openshell/sandbox:0.1.4"
+supervisor_image = "ghcr.io/nvidia/openshell/supervisor:0.1.4"
 image_pull_policy = "if_not_present"
 sandbox_label = "openshell"
 app_armor_profile = "Unconfined"

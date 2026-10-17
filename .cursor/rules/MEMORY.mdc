@@ -1,0 +1,12 @@
+---
+description: Read and update the repo-root MEMORY.md before and after NemoClaw deploy work.
+alwaysApply: true
+---
+
+# MEMORY.md
+
+This repo is one ops project. Experience lives in the root `MEMORY.md`, not in this rule.
+
+Read `MEMORY.md` before changing deploy scripts, compose, or `personal_config`. When a local attempt fails or a path works, append a short English bullet there under `GOTCHA` or `TASTE`.
+
+Never write API keys, bot tokens, or inference tokens into `MEMORY.md`, git, or logs.
