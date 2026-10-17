@@ -88,7 +88,20 @@ host_onboard_resume_only() {
     rm -f "$log"
     return 0
   fi
-  die "onboard --resume failed for ${NEMOCLAW_SANDBOX_NAME}; refusing to create a new sandbox. $(tail -n 40 "$log" | sed -E 's/((TOKEN|SECRET|API_KEY|AUTHORIZATION|BEARER|PASSWORD)[=:][[:space:]]*)[^[:space:]]+/\1[redacted]/Ig')"
+  if grep -q "No resumable onboarding session was found." "$log"; then
+    printf 'no interrupted session; onboarding %s without --fresh\n' "$NEMOCLAW_SANDBOX_NAME"
+    if host_nemoclaw_cmd onboard \
+      --non-interactive \
+      --yes-i-accept-third-party-software \
+      --yes \
+      --no-ollama-autostart \
+      --agent "$NEMOCLAW_AGENT" \
+      --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
+      rm -f "$log"
+      return 0
+    fi
+  fi
+  die "onboard failed for ${NEMOCLAW_SANDBOX_NAME}; refusing --fresh. $(tail -n 40 "$log" | sed -E 's/((TOKEN|SECRET|API_KEY|AUTHORIZATION|BEARER|PASSWORD)[=:][[:space:]]*)[^[:space:]]+/\1[redacted]/Ig')"
 }
 
 host_upgrade_sandboxes() {
