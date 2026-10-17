@@ -142,12 +142,8 @@ host_onboard_resume_only() {
     # The CLI only finds mTLS certs via OPENSHELL_LOCAL_TLS_DIR. The gateway
     # writes them under its state dir, which is not the CLI default.
     export OPENSHELL_LOCAL_TLS_DIR="${HOME}/.local/state/nemoclaw/openshell-docker-gateway/tls"
-    # ~/.config on this Mac mini is root-owned, so the CLI cannot create
-    # ~/.config/openshell/gateways. Point it at a directory the runner owns.
     if [[ ! -w "${HOME}/.config" ]]; then
-      export XDG_CONFIG_HOME="${HOME}/.nemoclaw/xdg"
-      mkdir -p "$XDG_CONFIG_HOME"
-      chmod 700 "$XDG_CONFIG_HOME"
+      die "~/.config is not writable by ${USER}. On the Mac mini run: sudo chown ${USER}:staff ${HOME}/.config && chmod u+rwx ${HOME}/.config"
     fi
   fi
   printf 'starting a new onboarding session for %s\n' "$NEMOCLAW_SANDBOX_NAME"
