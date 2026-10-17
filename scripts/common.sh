@@ -291,6 +291,14 @@ ensure_homebrew_openshell_gateway() {
     gw="${bin_dir}/openshell-gateway"
   fi
   export PATH="$(dirname "$gw"):${PATH}"
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    # nemohermes onboard starts its own Docker-driver gateway on 127.0.0.1:8080.
+    # A KeepAlive LaunchAgent takes the port back after onboard stops it.
+    launchctl bootout "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
+    launchctl disable "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
+    rm -f "${HOME}/Library/LaunchAgents/com.nemoclaw.openshell-gateway.plist"
+    return 0
+  fi
   local plist="${HOME}/Library/LaunchAgents/com.nemoclaw.openshell-gateway.plist"
   mkdir -p "${HOME}/Library/LaunchAgents" "${HOME}/Library/Logs"
   cat >"$plist" <<EOF
