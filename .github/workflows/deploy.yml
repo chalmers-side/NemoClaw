@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: read 
 
 jobs:
   deploy:
