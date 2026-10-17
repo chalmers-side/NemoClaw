@@ -175,6 +175,20 @@ host_onboard_resume_only() {
       return 0
     fi
   fi
+  if grep -q "inference route reservation cannot change before the owning create transaction completes" "$log"; then
+    printf 'clearing the interrupted onboarding session for %s\n' "$NEMOCLAW_SANDBOX_NAME"
+    if NEMOCLAW_RECREATE_WITHOUT_BACKUP=1 host_nemoclaw_cmd onboard \
+      --non-interactive \
+      --yes-i-accept-third-party-software \
+      --yes \
+      --fresh \
+      --no-ollama-autostart \
+      --agent "$NEMOCLAW_AGENT" \
+      --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
+      rm -f "$log"
+      return 0
+    fi
+  fi
   host_onboard_failure "$log"
 }
 
