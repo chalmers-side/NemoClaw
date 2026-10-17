@@ -259,9 +259,15 @@ ensure_homebrew_openshell_gateway() {
   command -v brew >/dev/null || die "Homebrew is required for the macOS OpenShell gateway"
   local uid i code
   uid="$(id -u)"
-  if ! brew services start openshell; then
-    brew services start nvidia/openshell/openshell || die "failed to start Homebrew openshell"
+  if ! brew tap | grep -qx 'nvidia/openshell'; then
+    brew tap nvidia/openshell
   fi
+  # Newer Homebrew refuses third-party formulae until the tap is trusted.
+  brew trust nvidia/openshell >/dev/null 2>&1 || true
+  if ! brew list --formula openshell >/dev/null 2>&1; then
+    brew install nvidia/openshell/openshell
+  fi
+  brew services start openshell || die "failed to start Homebrew openshell"
   launchctl enable "gui/${uid}/sh.brew.openshell" >/dev/null 2>&1 || true
   for i in $(seq 1 30); do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:8080/ || true)"
