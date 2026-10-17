@@ -33,6 +33,46 @@ source "${SCRIPT_DIR}/ensure-local-llm.sh"
 NEMOCLAW_ACTION="$ACTION"
 export NEMOCLAW_ACTION
 
+ensure_host_nemohermes() {
+  local pin src log prefix
+  export PATH="/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
+  if command -v nemohermes >/dev/null 2>&1 && nemohermes --version >/dev/null 2>&1; then
+    return 0
+  fi
+  ensure_node_for_auth_proxy
+  export PATH="/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
+  command -v npm >/dev/null 2>&1 || die "npm is required to install nemohermes"
+  pin="1e82499a048d5a4d85b0876d8c07bd93c8a9a5de"
+  src="${HOME}/.nemoclaw/source"
+  log="${HOME}/Library/Logs/nemoclaw-cli-install.log"
+  prefix="${HOME}/.local"
+  mkdir -p "${HOME}/Library/Logs" "$prefix"
+  if [[ ! -d "${src}/.git" ]]; then
+    rm -rf "$src"
+    mkdir -p "$src"
+    git -C "$src" init -q
+    git -C "$src" remote add origin https://github.com/NVIDIA/NemoClaw.git
+    GIT_TERMINAL_PROMPT=0 git -C "$src" fetch --depth 1 origin "$pin" \
+      || die "could not fetch NemoClaw ${pin}"
+    git -C "$src" checkout --detach FETCH_HEAD
+  fi
+  (
+    cd "$src"
+    export NEMOCLAW_INSTALLING=1
+    export NEMOCLAW_AGENT=hermes
+    export npm_config_prefix="$prefix"
+    node scripts/lib/openshell-sdk-install.mts prepare
+    npm install --ignore-scripts --include=optional --@nvidia:registry=https://npm.pkg.github.com
+    node scripts/lib/openshell-sdk-install.mts check
+    npm run --if-present build:cli
+    (cd nemoclaw && npm ci --ignore-scripts && npm run build)
+    npm link --ignore-scripts
+  ) >"$log" 2>&1 || die "nemohermes install failed. $(tail -n 40 "$log" | grep -v -i -E 'authToken|authorization|bearer' || true)"
+  export PATH="${prefix}/bin:${PATH}"
+  command -v nemohermes >/dev/null 2>&1 \
+    || die "nemohermes install finished but the binary is not on PATH"
+}
+
 host_onboard_resume_only() {
   printf 'onboarding %s with --resume\n' "$NEMOCLAW_SANDBOX_NAME"
   if ! host_nemoclaw_cmd onboard \
@@ -72,6 +112,7 @@ if ollama_on_host; then
   report_docker_desktop_budget
   ensure_homebrew_openshell_gateway
   ensure_local_llm
+  ensure_host_nemohermes
   install_ollama_auth_proxy_agent
   install_macos_bridge_boot_daemon
   case "$ACTION" in
