@@ -98,6 +98,9 @@ host_onboard_resume_only() {
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
     export DOCKER_CONFIG="$(mktemp -d)"
     printf '%s\n' '{}' >"${DOCKER_CONFIG}/config.json"
+    # The CLI only finds mTLS certs via OPENSHELL_LOCAL_TLS_DIR. The gateway
+    # writes them under its state dir, which is not the CLI default.
+    export OPENSHELL_LOCAL_TLS_DIR="${HOME}/.local/state/nemoclaw/openshell-docker-gateway/tls"
   fi
   printf 'onboarding %s with --resume\n' "$NEMOCLAW_SANDBOX_NAME"
   if host_nemoclaw_cmd onboard \
