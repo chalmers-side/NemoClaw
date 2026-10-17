@@ -73,48 +73,6 @@ ensure_host_nemohermes() {
     || die "nemohermes install finished but the binary is not on PATH"
 }
 
-enable_providers_v2() {
-  local log="$1"
-  {
-    printf '\n--- providers_v2 set ---\n'
-    openshell settings set -g nemoclaw --global --key providers_v2_enabled --value true --yes
-    printf '\n--- providers_v2 get ---\n'
-    openshell settings get -g nemoclaw --global --json || true
-  } >>"$log" 2>&1 || true
-}
-
-# Drop only an unfinished route reservation. A ready sandbox has no
-# pendingRouteReservation, so this leaves it in place. Do not use
-# `sandbox destroy`: that also removes the Hermes state volume.
-clear_unfinished_route_reservation() {
-  local registry="${HOME}/.nemoclaw/sandboxes.json" removed
-  [[ -f "$registry" ]] || return 0
-  removed="$(python3 - "$registry" "$NEMOCLAW_SANDBOX_NAME" <<'PY'
-import json, sys
-path, name = sys.argv[1], sys.argv[2]
-with open(path) as handle:
-    data = json.load(handle)
-sandboxes = data.get("sandboxes") or {}
-entry = sandboxes.get(name)
-if not isinstance(entry, dict):
-    raise SystemExit(0)
-if entry.get("pendingRouteReservation") is not True or entry.get("pendingCreateIdentity") is not None:
-    raise SystemExit(0)
-del sandboxes[name]
-data["sandboxes"] = sandboxes
-if data.get("defaultSandbox") == name:
-    data["defaultSandbox"] = next(iter(sandboxes), None)
-with open(path, "w") as handle:
-    json.dump(data, handle, indent=2)
-    handle.write("\n")
-print(f"removed pending route reservation for {name}")
-PY
-)"
-  if [[ "$removed" == removed\ pending\ route\ reservation* ]]; then
-    openshell sandbox delete -g nemoclaw "$NEMOCLAW_SANDBOX_NAME" || true
-  fi
-}
-
 host_onboard_failure() {
   local log="$1" reason
   {
@@ -147,16 +105,10 @@ host_onboard_resume_only() {
     fi
   fi
   printf 'starting a new onboarding session for %s\n' "$NEMOCLAW_SANDBOX_NAME"
-  clear_unfinished_route_reservation
-  if openshell gateway list -o json 2>/dev/null | grep -q '"name": "nemoclaw"'; then
-    enable_providers_v2 "$log"
-  else
-    printf 'gateway nemoclaw is not registered yet; onboard will register it\n'
-  fi
-  # poc-claw is not ready, so it has no workspace to snapshot. NemoClaw stops
-  # the recreate until this is set. One onboard only; a second --fresh sees a
-  # different gateway authority and refuses to delete the sandbox.
-  if NEMOCLAW_RECREATE_WITHOUT_BACKUP=1 host_nemoclaw_cmd onboard \
+  # Do not delete the sandbox and do not call openshell before onboard.
+  # A recreate delete is refused when the registry gateway does not match
+  # the transaction, and this runner has no sudo to repair that.
+  if host_nemoclaw_cmd onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
     --yes \
@@ -197,7 +149,9 @@ if ollama_on_host; then
   ensure_local_llm
   ensure_host_nemohermes
   install_ollama_auth_proxy_agent
-  install_macos_bridge_boot_daemon
+  if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
+    install_macos_bridge_boot_daemon
+  fi
   case "$ACTION" in
     onboard) host_onboard_resume_only ;;
     upgrade) host_upgrade_sandboxes ;;
