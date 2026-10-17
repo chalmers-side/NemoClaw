@@ -259,8 +259,15 @@ ensure_homebrew_openshell_gateway() {
   command -v brew >/dev/null || die "Homebrew is required for the macOS OpenShell gateway"
   local uid i code
   uid="$(id -u)"
+  # brew tap uses the login keychain. A LaunchAgent gets errSecInteractionNotAllowed
+  # (-25308) and git then asks for a GitHub username. The tap is public.
   if ! brew tap | grep -qx 'nvidia/openshell'; then
-    brew tap nvidia/openshell
+    local tap_dest
+    tap_dest="$(brew --repository)/Library/Taps/nvidia/homebrew-openshell"
+    mkdir -p "$(dirname "$tap_dest")"
+    git -c credential.helper= clone --origin=origin \
+      https://github.com/nvidia/homebrew-openshell "$tap_dest"
+    git -C "$tap_dest" config --local credential.helper ''
   fi
   # Newer Homebrew refuses third-party formulae until the tap is trusted.
   brew trust nvidia/openshell >/dev/null 2>&1 || true
