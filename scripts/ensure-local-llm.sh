@@ -73,7 +73,7 @@ start_host_ollama() {
     <key>OLLAMA_NUM_PARALLEL</key>
     <string>1</string>
     <key>OLLAMA_KEEP_ALIVE</key>
-    <string>-1</string>
+    <string>5m</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -134,6 +134,58 @@ ensure_local_llm() {
   fi
   run_compose logs --tail 80 ollama >&2 || true
   die "Compose Ollama did not become ready on 127.0.0.1:11434"
+}
+
+# User LaunchAgent. The plist points at the wrapper; the token stays in the
+# token file and is not written into the plist.
+install_ollama_auth_proxy_agent() {
+  local uid plist script
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  uid="$(id -u)"
+  script="${ROOT}/scripts/ollama-auth-proxy-agent.sh"
+  [[ -f "$script" ]] || die "missing ${script}"
+  chmod 755 "$script"
+  [[ -f "${HOME}/.nemoclaw/ollama-proxy-token" ]] || die "missing ${HOME}/.nemoclaw/ollama-proxy-token"
+  chmod 600 "${HOME}/.nemoclaw/ollama-proxy-token" || true
+  [[ -f "${HOME}/.nemoclaw/source/scripts/ollama-auth-proxy.mts" ]] ||
+    die "missing ${HOME}/.nemoclaw/source/scripts/ollama-auth-proxy.mts"
+  mkdir -p "${HOME}/Library/LaunchAgents" "${HOME}/Library/Logs"
+  plist="${HOME}/Library/LaunchAgents/com.nemoclaw.ollama-auth-proxy.plist"
+  cat >"$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nemoclaw.ollama-auth-proxy</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${script}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${HOME}/Library/Logs/nemoclaw-ollama-auth-proxy.log</string>
+  <key>StandardErrorPath</key>
+  <string>${HOME}/Library/Logs/nemoclaw-ollama-auth-proxy.log</string>
+</dict>
+</plist>
+EOF
+  launchctl bootout "gui/${uid}/com.nemoclaw.ollama-auth-proxy" >/dev/null 2>&1 || true
+  local attempt
+  for attempt in 1 2 3; do
+    if launchctl bootstrap "gui/${uid}" "$plist"; then
+      break
+    fi
+    sleep 1
+    launchctl bootout "gui/${uid}/com.nemoclaw.ollama-auth-proxy" >/dev/null 2>&1 || true
+    if [[ "$attempt" == "3" ]]; then
+      die "failed to bootstrap com.nemoclaw.ollama-auth-proxy"
+    fi
+  done
+  launchctl enable "gui/${uid}/com.nemoclaw.ollama-auth-proxy" >/dev/null 2>&1 || true
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

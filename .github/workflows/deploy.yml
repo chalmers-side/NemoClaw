@@ -30,7 +30,8 @@ permissions:
 jobs:
   deploy:
     name: Deploy ${{ inputs.target }}
-    runs-on: [self-hosted, nemoclaw, ${{ inputs.target }}]
+    # poc runs on the macOS ARM64 self-hosted runner. Other targets stay on nemoclaw,<user>.
+    runs-on: ${{ fromJSON(inputs.target == 'poc' && '["self-hosted", "macOS", "ARM64"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target)) }}
     environment: ${{ inputs.target }}
     timeout-minutes: 120
     steps:

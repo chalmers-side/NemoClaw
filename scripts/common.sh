@@ -208,6 +208,77 @@ ensure_macos_host_openshell_internal() {
   dscacheutil -flushcache >/dev/null 2>&1 || true
 }
 
+# One-shot boot restore. Without a cached sudo credential this does not
+# write /Library or /etc; the alias then lasts only until reboot.
+install_macos_bridge_boot_daemon() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  local label="com.nemoclaw.openshell-bridge"
+  local plist="/Library/LaunchDaemons/${label}.plist"
+  local script="${ROOT}/scripts/macos-openshell-bridge.sh"
+  [[ -f "$script" ]] || die "missing ${script}"
+  chmod 755 "$script"
+  if ! sudo -n true >/dev/null 2>&1; then
+    printf 'note: sudo -n unavailable; loopback alias %s will not be restored at boot\n' \
+      "$MACOS_OPENSHELL_BRIDGE_IP"
+    return 0
+  fi
+  sudo -n tee "$plist" >/dev/null <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${script}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+EOF
+  sudo -n chown root:wheel "$plist"
+  sudo -n chmod 644 "$plist"
+  sudo -n launchctl bootout "system/${label}" >/dev/null 2>&1 || true
+  sudo -n launchctl bootstrap system "$plist" || die "failed to bootstrap ${label}"
+}
+
+ensure_homebrew_openshell_gateway() {
+  command -v brew >/dev/null || die "Homebrew is required for the macOS OpenShell gateway"
+  local uid i code
+  uid="$(id -u)"
+  if ! brew services start openshell; then
+    brew services start nvidia/openshell/openshell || die "failed to start Homebrew openshell"
+  fi
+  launchctl enable "gui/${uid}/sh.brew.openshell" >/dev/null 2>&1 || true
+  for i in $(seq 1 30); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:8080/ || true)"
+    case "$code" in
+      2* | 3* | 4*) return 0 ;;
+    esac
+    sleep 1
+  done
+  die "Homebrew OpenShell gateway did not answer on 127.0.0.1:8080"
+}
+
+# Print the current Docker Desktop size. Does not change it.
+# 4 CPUs, 6 GiB RAM, 2 GiB swap, and 40 GiB disk are the measurement start.
+# Leave RAM alone when the sandbox RSS is already above 6 GiB.
+report_docker_desktop_budget() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  local info mem cpus cid
+  info="$(docker info 2>/dev/null || true)"
+  mem="$(printf '%s\n' "$info" | awk -F': ' '/Total Memory/ { print $2; exit }')"
+  cpus="$(printf '%s\n' "$info" | awk -F': ' '/^ CPUs/ { print $2; exit }')"
+  printf 'Docker Desktop now: CPUs=%s memory=%s\n' "${cpus:-unknown}" "${mem:-unknown}"
+  printf 'Measurement start: 4 CPUs, 6 GiB RAM, 2 GiB swap, 40 GiB disk. Do not shrink RAM when sandbox RSS is above 6 GiB.\n'
+  cid="$(docker ps --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" --format '{{.ID}}' | head -1)"
+  if [[ -n "$cid" ]]; then
+    docker stats --no-stream --format 'sandbox {{.Name}} mem={{.MemUsage}}' "$cid" || true
+  fi
+}
+
 preflight_host() {
   export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
   command -v docker >/dev/null || die "docker is required"
@@ -352,7 +423,7 @@ repair_sandbox_openshell_hosts() {
   local cid
   cid="$(docker ps --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" --format '{{.ID}}' | head -1)"
   [[ -n "$cid" ]] || return 0
-  docker exec -u 0 "$cid" python3 - <<'PY'
+  docker exec -i -u 0 "$cid" python3 - <<'PY'
 from pathlib import Path
 
 hosts = Path("/etc/hosts")
@@ -403,8 +474,229 @@ ensure_openshell_openai_inference() {
   if ! openshell inference get 2>/dev/null | grep -q "Provider:"; then
     openshell inference set --provider "$name" --model "$model" --timeout 90
     openshell inference set --system --provider "$name" --model "$model" --timeout 90
+  elif ! openshell inference get 2>/dev/null | grep -F "Model: ${model}" >/dev/null; then
+    openshell inference set --provider "$name" --model "$model" --timeout 90
+    openshell inference set --system --provider "$name" --model "$model" --timeout 90
   fi
   openshell sandbox provider attach "$NEMOCLAW_SANDBOX_NAME" "$name" >/dev/null 2>&1 || true
+}
+
+# Keep Hermes on the rewritable placeholder. A frozen
+# openshell:resolve:env:vN_... handle breaks after the policy revision changes.
+# This does not print the key and does not disable credential inspection.
+ensure_hermes_inference_placeholder() {
+  local cid changed
+  cid="$(docker ps --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" --format '{{.ID}}' | head -1)"
+  [[ -n "$cid" ]] || return 0
+  changed="$(docker exec -i -u sandbox -e NEMOCLAW_MODEL="${NEMOCLAW_MODEL:-}" "$cid" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+p = Path("/sandbox/.hermes/config.yaml")
+placeholder = "${NEMOCLAW_LOCAL_INFERENCE_TOKEN}"
+model = os.environ.get("NEMOCLAW_MODEL", "")
+if not p.exists():
+    print("0")
+    raise SystemExit
+try:
+    data = json.loads(p.read_text())
+except json.JSONDecodeError:
+    print("0")
+    raise SystemExit
+
+changed = False
+
+def is_local(name, obj):
+    if "ollama" in name.lower():
+        return True
+    blob = json.dumps(obj)
+    if "11434" in blob or "11435" in blob:
+        return True
+    for field in ("model", "default"):
+        val = obj.get(field)
+        if isinstance(val, str) and val.startswith("qwen"):
+            return True
+    return False
+
+def fix(name, obj):
+    global changed
+    if not isinstance(obj, dict) or not is_local(name, obj):
+        return
+    key = obj.get("api_key")
+    if not isinstance(key, str) or key != placeholder:
+        obj["api_key"] = placeholder
+        changed = True
+    if not model:
+        return
+    for field in ("model", "default"):
+        val = obj.get(field)
+        if isinstance(val, str) and val.startswith("qwen") and val != model:
+            obj[field] = model
+            changed = True
+
+model_obj = data.get("model")
+if isinstance(model_obj, dict):
+    fix("model", model_obj)
+elif isinstance(model_obj, str) and model and model_obj.startswith("qwen") and model_obj != model:
+    data["model"] = model
+    changed = True
+
+providers = data.get("providers")
+if isinstance(providers, dict):
+    for name, obj in providers.items():
+        fix(str(name), obj)
+
+custom = data.get("custom_providers")
+if isinstance(custom, dict):
+    for name, obj in custom.items():
+        fix(str(name), obj)
+elif isinstance(custom, list):
+    for obj in custom:
+        if isinstance(obj, dict):
+            fix(str(obj.get("name", "")), obj)
+
+if changed:
+    p.write_text(json.dumps(data, indent=2) + "\n")
+    print("1")
+else:
+    print("0")
+PY
+)"
+  [[ "$changed" == "1" ]] || return 0
+  printf 'rewrote Hermes inference placeholder in %s; restarting gateway\n' "$NEMOCLAW_SANDBOX_NAME"
+  if command -v "$(cli_name)" >/dev/null; then
+    host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" gateway restart >/dev/null
+  fi
+}
+
+# Enable body rewrite on the existing :11435 endpoint. Does not add an
+# endpoint that is not already there, and does not allow uninspected credentials.
+enable_inference_body_rewrite() {
+  local policy decision snapshot
+  command -v openshell >/dev/null || die "openshell is required to enable inference body rewrite"
+  policy="$(openshell policy get "$NEMOCLAW_SANDBOX_NAME" 2>/dev/null || true)"
+  snapshot="$(mktemp)"
+  chmod 600 "$snapshot"
+  printf '%s\n' "$policy" >"$snapshot"
+  set +e
+  decision="$(python3 - "$snapshot" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+chunks = re.split(r"\n(?=\s*-\s)", text)
+found = False
+for chunk in chunks:
+    if "host.openshell.internal" not in chunk:
+        continue
+    if not re.search(r"(port:\s*11435\b|host\.openshell\.internal:11435\b)", chunk):
+        continue
+    found = True
+    if re.search(r"request_body_credential_rewrite:\s*true\b", chunk):
+        print("ready")
+    else:
+        print("enable")
+    break
+if not found:
+    print("absent")
+PY
+)"
+  local py_status=$?
+  set -e
+  rm -f "$snapshot"
+  [[ "$py_status" -eq 0 ]] || die "failed to read OpenShell policy for ${NEMOCLAW_SANDBOX_NAME}"
+  case "$decision" in
+    ready) return 0 ;;
+    enable)
+      openshell policy update "$NEMOCLAW_SANDBOX_NAME" \
+        --add-endpoint "host.openshell.internal:11435:read-write:rest:enforce:request-body-credential-rewrite,allowed-ip=10.0.0.0/8,allowed-ip=172.16.0.0/12,allowed-ip=192.168.0.0/16" \
+        --wait --timeout 60
+      ;;
+    *)
+      die "inference body rewrite is off and host.openshell.internal:11435 is not an existing policy endpoint"
+      ;;
+  esac
+}
+
+probe_sandbox_inference() {
+  local cid result attempt
+  case "${NEMOCLAW_ACTION:-}" in
+    onboard | upgrade) ;;
+    *) return 0 ;;
+  esac
+  cid="$(docker ps --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" --format '{{.ID}}' | head -1)"
+  [[ -n "$cid" ]] || return 0
+  for attempt in 1 2; do
+    result="$(docker exec -i -u sandbox -e NEMOCLAW_MODEL="${NEMOCLAW_MODEL:-qwen3:4b}" "$cid" python3 - <<'PY'
+import json
+import os
+import urllib.error
+import urllib.request
+
+model = os.environ.get("NEMOCLAW_MODEL") or "qwen3:4b"
+payload = {
+    "model": model,
+    "messages": [{"role": "user", "content": "Reply with ok."}],
+    "max_tokens": 8,
+    "api_key": "${NEMOCLAW_LOCAL_INFERENCE_TOKEN}",
+}
+req = urllib.request.Request(
+    "http://host.openshell.internal:11435/v1/chat/completions",
+    data=json.dumps(payload).encode(),
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer ${NEMOCLAW_LOCAL_INFERENCE_TOKEN}",
+    },
+)
+try:
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+        code = resp.status
+except urllib.error.HTTPError as exc:
+    raw = exc.read().decode("utf-8", "replace")
+    code = exc.code
+except Exception as exc:
+    print("error")
+    print(type(exc).__name__)
+    raise SystemExit
+low = raw.lower()
+if "ssrf_denied" in low or "ssrf denied" in low:
+    print("ssrf_denied")
+elif (
+    "rewrite is disabled" in low
+    or "credential placeholder denied" in low
+    or "credential_injection_failed" in low
+):
+    print("rewrite_denied")
+elif code == 200:
+    print("ok")
+else:
+    print("http_%s" % code)
+PY
+)"
+    case "$result" in
+      ok)
+        printf 'sandbox inference %s returned 200\n' "$NEMOCLAW_SANDBOX_NAME"
+        return 0
+        ;;
+      rewrite_denied)
+        if [[ "$attempt" == "1" ]]; then
+          printf 'enabling body rewrite on the existing inference endpoint\n'
+          enable_inference_body_rewrite
+          continue
+        fi
+        die "inference body rewrite is still denied for ${NEMOCLAW_SANDBOX_NAME}"
+        ;;
+      ssrf_denied)
+        die "sandbox inference was ssrf_denied for ${NEMOCLAW_SANDBOX_NAME}"
+        ;;
+      *)
+        die "sandbox inference probe returned ${result} for ${NEMOCLAW_SANDBOX_NAME}"
+        ;;
+    esac
+  done
 }
 
 # Onboard can leave platforms.discord.enabled=false after a failed finalization
@@ -464,7 +756,9 @@ verify_sandbox() {
   printf 'verifying sandbox %s\n' "$NEMOCLAW_SANDBOX_NAME"
   repair_sandbox_openshell_hosts
   ensure_openshell_openai_inference
+  ensure_hermes_inference_placeholder
   ensure_hermes_discord_platform
+  probe_sandbox_inference
   if run_compose exec -T nemoclaw true >/dev/null 2>&1; then
     nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status
     nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" connect --probe-only

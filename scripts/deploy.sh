@@ -30,19 +30,27 @@ esac
 # shellcheck source=scripts/ensure-local-llm.sh
 source "${SCRIPT_DIR}/ensure-local-llm.sh"
 
-free_compose_ports
 NEMOCLAW_ACTION="$ACTION"
 export NEMOCLAW_ACTION
 
-printf 'starting compose stack for %s (%s)\n' "$TARGET" "$ACTION"
-if ollama_on_host; then
-  run_compose up -d --build init gateway
-  ensure_local_llm
-else
-  run_compose up -d --build init gateway ollama
-  ensure_local_llm
-fi
-run_compose up -d --build --force-recreate nemoclaw
+host_onboard_resume_only() {
+  printf 'onboarding %s with --resume\n' "$NEMOCLAW_SANDBOX_NAME"
+  if ! host_nemoclaw_cmd onboard \
+    --non-interactive \
+    --yes-i-accept-third-party-software \
+    --yes \
+    --resume \
+    --no-ollama-autostart \
+    --agent "$NEMOCLAW_AGENT" \
+    --name "$NEMOCLAW_SANDBOX_NAME"; then
+    die "onboard --resume failed for ${NEMOCLAW_SANDBOX_NAME}; refusing to create a new sandbox"
+  fi
+}
+
+host_upgrade_sandboxes() {
+  printf 'upgrading sandboxes; Hermes state volume is left in place\n'
+  host_nemoclaw_cmd upgrade-sandboxes --check || true
+}
 
 wait_for_controller() {
   local i
@@ -59,5 +67,25 @@ wait_for_controller() {
   die "NemoClaw controller did not finish onboard for ${NEMOCLAW_SANDBOX_NAME}"
 }
 
-wait_for_controller
-printf 'compose stack is up for %s\n' "$TARGET"
+if ollama_on_host; then
+  printf 'starting host Ollama path for %s (%s)\n' "$TARGET" "$ACTION"
+  report_docker_desktop_budget
+  ensure_homebrew_openshell_gateway
+  ensure_local_llm
+  install_ollama_auth_proxy_agent
+  install_macos_bridge_boot_daemon
+  case "$ACTION" in
+    onboard) host_onboard_resume_only ;;
+    upgrade) host_upgrade_sandboxes ;;
+  esac
+  verify_sandbox
+  printf 'host stack is up for %s\n' "$TARGET"
+else
+  free_compose_ports
+  printf 'starting compose stack for %s (%s)\n' "$TARGET" "$ACTION"
+  run_compose up -d --build init gateway ollama
+  ensure_local_llm
+  run_compose up -d --build --force-recreate nemoclaw
+  wait_for_controller
+  printf 'compose stack is up for %s\n' "$TARGET"
+fi

@@ -21,7 +21,9 @@ GitHub Actions (選機器)
   Environment: chalmers | cliff | poc
         │
         ▼
-  self-hosted runner (labels: nemoclaw,<user>)
+  self-hosted runner
+    poc: self-hosted, macOS, ARM64
+    others: nemoclaw,<user>
         │
         ├─ personal_config/<user>/config.env    ← git
         └─ personal_config/<user>/secrets.env   ← gitignore，只在該機器
@@ -38,16 +40,16 @@ GitHub Actions (選機器)
 
 每次部署在 GitHub 選一台機器。Job 只跑在該使用者的 self-hosted runner 上，所以金鑰不必離開那台機器。
 
-本機 PoC（這台 Mac）用 `personal_config/poc/`：agent 在 `config.env` 切換，共用 LLM 是 Compose 裡的 Ollama，不需要 cloud API key。
+`poc` 用 `personal_config/poc/`，Actions 跑在 labels 為 `self-hosted`, `macOS`, `ARM64` 的 runner 上。agent 在 `config.env` 切換。macOS 的共用 LLM 是本機 Ollama，不需要 cloud API key。
 
-## 本機 PoC（poc）
+## macOS PoC（poc）
 
-在這台機器試跑，不經過 GitHub Actions：
+`poc` 的 deploy / status 跑在 `runs-on: [self-hosted, macOS, ARM64]`。在那台機器的 checkout 裡，步驟與下面相同：
 
 1. 打開 **Docker Desktop**，等到 `docker info` 成功
 2. 編輯 [`personal_config/poc/config.env`](personal_config/poc/config.env)：
    - `NEMOCLAW_AGENT`：`hermes`（預設）、`openclaw`、或 `langchain-deepagents-code`
-   - `NEMOCLAW_MODEL`：共用本機模型。Hermes 需要 native context ≥ 64000，PoC 用 `qwen3.5:9b`。真 3B（`qwen2.5:3b`）請把 agent 改成 `openclaw`
+   - `NEMOCLAW_MODEL`：共用本機模型。Hermes 需要 native context ≥ 64000。16GB 預設是 `qwen3:4b`。`qwen3.5:9b` 在 64k、`q4_0` KV 時約 7.2 GiB，會和 Docker VM 搶統一記憶體。`qwen3:8b` 要先確認 context ≥ 64000 並量過 RSS，才換成預設。真 3B（`qwen2.5:3b`）請把 agent 改成 `openclaw`
 3. 部署：
 
 ```bash
@@ -55,13 +57,14 @@ bash ./scripts/deploy.sh poc onboard
 bash ./scripts/status.sh poc
 ```
 
-`deploy.sh` 會 `docker compose up --build` 整份 stack。Compose 專案名必須小寫（`nemoclaw-poc`）；容器是 `NemoClaw-<user>-ollama` 這種形式。等價於在設好 `NEMOCLAW_TARGET` / `NEMOCLAW_INSTALL_REF` 之後自己跑 compose。
+macOS 且 provider 是 Ollama 時，`deploy.sh` 不拉起 compose gateway / Ollama，也不清掉 Homebrew gateway。它啟動本機 Ollama、Homebrew gateway、`:11435` auth proxy，然後只跑宿主 CLI `onboard --resume`。resume 失敗就停，不會再建一個 sandbox。`upgrade` 只跑 `upgrade-sandboxes`，不刪 Hermes volume。Linux 目標仍走 compose。
 
 服務分工：
 
 - **gateway**：`ghcr.io/nvidia/openshell/gateway`，資料在 `/var/lib/openshell`（host 與容器同一路徑，NVIDIA 要求）
 - **Ollama**：Linux 用 `NemoClaw-<user>-ollama`，host 只綁 `127.0.0.1:11434`。macOS 改跑本機 Ollama（Metal），compose 容器要停掉，否則搶同一個 port
-- **NemoClaw controller**：`NemoClaw-<user>-cli`，負責 onboard、CLI、以及 sandbox 打回的 inference proxy（`127.0.0.1:11435`）
+- **NemoClaw controller**：Linux 用 `NemoClaw-<user>-cli`。macOS PoC 的 onboard 改由宿主機上的 `nemohermes` 執行，不啟動這個容器
+- **auth proxy**：宿主機 LaunchAgent `com.nemoclaw.ollama-auth-proxy`，包既有的 `ollama-auth-proxy.mts`，聽 `:11435`。token 留在 `~/.nemoclaw/ollama-proxy-token`
 - **Sandbox**：gateway 建立的 Docker 容器，不列在 compose 裡
 
 這台 Mac 的 NemoClaw onboard **不會接受** Docker 發佈在 `:8080` 的 gateway（port owner 會被判成 `com.docker.backend`）。PoC 因此用 Homebrew `openshell-gateway` 聽 `127.0.0.1:8080`。Ollama 也跑在 Mac 本機（LaunchAgent `com.nemoclaw.ollama`），Docker Desktop 的 Linux VM 看不到 M4 GPU。模型仍在 `~/.ollama`，sandbox 還是打 `127.0.0.1:11435` 的 auth proxy。
@@ -75,16 +78,16 @@ printf '10.255.255.254\thost.openshell.internal\t# nemoclaw-host-openshell-inter
 
 換 agent 只改 `NEMOCLAW_AGENT` 再 onboard；換模型改 `NEMOCLAW_MODEL` 後再 deploy。
 
-已裝好之後：
+已裝好之後，macOS 用宿主 CLI：
 
 ```bash
-docker compose -p nemoclaw-poc -f compose/docker-compose.yml --project-directory compose exec nemoclaw nemohermes poc-claw status
-docker compose -p nemoclaw-poc -f compose/docker-compose.yml --project-directory compose exec nemoclaw nemohermes poc-claw connect
+bash ./scripts/status.sh poc
+nemohermes poc-claw status
 ```
 
-或直接 `bash ./scripts/status.sh poc`。
+Linux 的 controller 起來之後也可以 `docker compose -p nemoclaw-<user> ... exec nemoclaw`。
 
-Hermes 官方要求 loaded context ≥ 64000。`qwen2.5:3b` 只有 32k，不能給 Hermes 用；PoC 用 `qwen3.5:9b`。要用真 3B 時改：
+Hermes 官方要求 loaded context ≥ 64000。`qwen2.5:3b` 只有 32k，不能給 Hermes 用；16GB PoC 預設是 `qwen3:4b`。Ollama `KEEP_ALIVE` 是 `5m`。Docker Desktop 先量現有 VM，再以 4 CPU、6GB RAM、2GB swap、40GB disk 當起點；sandbox RSS 超過 6GB 就不要縮小。要用真 3B 時改：
 
 ```bash
 # personal_config/poc/config.env
@@ -153,7 +156,7 @@ chmod 600 personal_config/<user>/secrets.env
 nemoclaw,<username>
 ```
 
-例如 chalmers 機器：`nemoclaw,chalmers`。registration token 只在這台機器用一次，不要進 git。
+例如 chalmers 機器：`nemoclaw,chalmers`。`poc` 不用這組 label，它的 runner 要有 `self-hosted`、`macOS`、`ARM64`。registration token 只在該機器用一次，不要進 git。
 
 Runner 對這個 repo 有完整機器權限，只裝在可信的 chalmers / cliff 機器上。
 
@@ -168,7 +171,7 @@ Settings → Environments → 建立與使用者同名的 environment（`chalmer
 ## 用 GitHub Actions 指定機器部署
 
 1. 開 repo 的 **Actions** → **Deploy NemoClaw** → **Run workflow**
-2. `target` 選 `poc`、`chalmers` 或 `cliff`
+2. `target` 選 `poc`、`chalmers` 或 `cliff`。`poc` 只會被 `self-hosted, macOS, ARM64` 那台 runner 接走
 3. `action` 選：
    - `onboard`：`compose up --build` 並建立 / 重建 sandbox
    - `upgrade`：用 pin 的 SHA 重裝 controller 裡的 NemoClaw CLI，並檢查 sandbox 升級
