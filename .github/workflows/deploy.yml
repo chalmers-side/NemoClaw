@@ -1,6 +1,6 @@
 name: Deploy NemoClaw
 
-on:
+on: 
   push:
     branches:
       - main
