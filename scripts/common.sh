@@ -47,6 +47,10 @@ require_target() {
   TARGET="$target"
   CONFIG_FILE="${ROOT}/personal_config/${target}/config.env"
   [[ -f "$CONFIG_FILE" ]] || die "missing ${CONFIG_FILE}"
+  # actions/checkout wipes ignored files under _work. Keep the filled file outside that tree.
+  if [[ -z "${SECRETS_FILE:-}" && -n "${GITHUB_ACTIONS:-}" ]]; then
+    SECRETS_FILE="${HOME}/.nemoclaw/runner-secrets/${target}/secrets.env"
+  fi
   SECRETS_FILE="${SECRETS_FILE:-${ROOT}/personal_config/${target}/secrets.env}"
 }
 
@@ -107,8 +111,15 @@ load_secrets() {
   local cred
   cred="$(provider_credential_var)"
   if [[ ! -f "$SECRETS_FILE" ]]; then
+    if [[ -n "${GITHUB_ACTIONS:-}" && -f "${ROOT}/personal_config/secrets.env.example" ]]; then
+      mkdir -p "$(dirname "$SECRETS_FILE")"
+      chmod 700 "${HOME}/.nemoclaw/runner-secrets" "$(dirname "$SECRETS_FILE")" 2>/dev/null || true
+      cp "${ROOT}/personal_config/secrets.env.example" "$SECRETS_FILE"
+      chmod 600 "$SECRETS_FILE"
+      die "wrote a placeholder at ${SECRETS_FILE}. Fill the keys for ${TARGET}, then rerun."
+    fi
     if [[ -n "$cred" ]] || [[ -n "${DISCORD_SERVER_ID:-}" ]] || [[ "${NEMOCLAW_WEB_SEARCH_PROVIDER}" == "tavily" || "${NEMOCLAW_WEB_SEARCH_PROVIDER}" == "brave" ]]; then
-      die "missing ${SECRETS_FILE} (copy personal_config/secrets.env.example to personal_config/${TARGET}/secrets.env and fill it)"
+      die "missing ${SECRETS_FILE} (on the runner: ~/.nemoclaw/runner-secrets/${TARGET}/secrets.env mode 600; do not put it in the Actions _work checkout)"
     fi
     printf 'no secrets file at %s (ok when this config needs no keys)\n' "$SECRETS_FILE"
     return 0

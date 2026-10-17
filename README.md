@@ -148,6 +148,8 @@ chmod 600 personal_config/<user>/secrets.env
 
 用編輯器填入該使用者 `config.env` 對應的 key。不要把填好的檔案 commit 回去。本機 Ollama 且沒開 Discord 可以不建這個檔。
 
+Actions 的第一次 deploy 若找不到金鑰，會在 runner 家目錄寫一份範本然後停下：`~/.nemoclaw/runner-secrets/<target>/secrets.env`（mode 600）。在那台機器上改這份檔，再重跑 workflow。不要把金鑰放進 `actions-runner/_work`，checkout 會清掉。
+
 ### 3. Self-hosted runner
 
 在 GitHub repo：Settings → Actions → Runners → New self-hosted runner。依該機器 OS 安裝，labels 設為：

@@ -4,6 +4,7 @@ Ops repo for per-user NVIDIA NemoClaw deploys. Not an upstream fork. PoC target 
 
 ## GOTCHA
 
+- Actions checkout deletes gitignored files under `actions-runner/_work`. The first Actions run copies `personal_config/secrets.env.example` to `~/.nemoclaw/runner-secrets/<target>/secrets.env` mode 600 and stops. Fill that file on the runner and rerun. Later runs do not overwrite it.
 - Compose project names must be lowercase. `NemoClaw-poc` is rejected. Use project `nemoclaw-<user>`; container, network, and volume names can stay `NemoClaw-<user>-*`.
 - macOS onboard rejects a Docker-published `:8080`. The port owner is `docker-proxy`, `socat`, or `com.docker.backend`, including when the controller shares the gateway pid and netns. Homebrew `openshell-gateway` `0.0.116` on `127.0.0.1:8080` is the path onboard accepts. The compose gateway image (`0.1.4`) stays unused on this Mac, and the controller service stays stopped.
 - OpenShell image tags omit `v` (`ghcr.io/nvidia/openshell/gateway:0.1.4`). The CLI tarball uses `v0.1.4`. Gateway `0.0.116` rejects a newer `gateway.toml` field such as `compute_driver`.
