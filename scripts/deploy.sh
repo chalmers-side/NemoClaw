@@ -78,6 +78,8 @@ host_onboard_failure() {
   {
     printf '\n--- openshell status ---\n'
     openshell status || true
+    printf '\n--- openshell gateway add ---\n'
+    openshell gateway add "https://127.0.0.1:8080" --local --name nemoclaw || true
     printf '\n--- openshell gateway list ---\n'
     openshell gateway list -o json || true
   } >>"$log" 2>&1 || true
