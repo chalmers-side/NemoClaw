@@ -74,16 +74,13 @@ ensure_host_nemohermes() {
 }
 
 host_onboard_failure() {
-  local log="$1"
+  local log="$1" reason
   {
     printf '\n--- openshell status ---\n'
     openshell status || true
-    printf '\n--- openshell gateway add ---\n'
-    openshell gateway add "https://127.0.0.1:8080" --local --name nemoclaw || true
-    printf '\n--- openshell gateway list ---\n'
-    openshell gateway list -o json || true
   } >>"$log" 2>&1 || true
-  die "onboard failed for ${NEMOCLAW_SANDBOX_NAME}; refusing --fresh. $(tail -c 1500 "$log" | sed -E 's/((TOKEN|SECRET|API_KEY|AUTHORIZATION|BEARER|PASSWORD)[=:][[:space:]]*)[^[:space:]]+/\1[redacted]/Ig')"
+  reason="$(grep -E 'Error:|×|failed to|did not|Permission denied|not ready|Cannot' "$log" | tail -n 20 || true)"
+  die "onboard failed for ${NEMOCLAW_SANDBOX_NAME}; refusing --fresh. ${reason:-$(tail -c 800 "$log")}"
 }
 
 host_onboard_resume_only() {
