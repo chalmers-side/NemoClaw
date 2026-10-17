@@ -15,15 +15,22 @@ export OLLAMA_PROXY_TOKEN
 export OLLAMA_PROXY_PORT="${OLLAMA_PROXY_PORT:-11435}"
 export OLLAMA_BACKEND_PORT="${OLLAMA_BACKEND_PORT:-11434}"
 
-node=""
-if [[ -x /opt/homebrew/bin/node ]]; then
-  node=/opt/homebrew/bin/node
-elif [[ -x /usr/local/bin/node ]]; then
-  node=/usr/local/bin/node
-else
-  export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.local/bin:${PATH:-/usr/bin:/bin}"
-  node="$(command -v node || true)"
-fi
+  node=""
+  candidates=(
+    /opt/homebrew/bin/node
+    /opt/homebrew/opt/node@22/bin/node
+    /usr/local/bin/node
+  )
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      node="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$node" ]]; then
+    export PATH="/opt/homebrew/bin:/opt/homebrew/opt/node@22/bin:/usr/local/bin:${HOME}/.local/bin:${PATH:-/usr/bin:/bin}"
+    node="$(command -v node || true)"
+  fi
 [[ -n "$node" && -x "$node" ]] || exit 1
 
 exec "$node" --no-warnings "$script"

@@ -138,6 +138,30 @@ ensure_local_llm() {
 
 # User LaunchAgent. The plist points at the wrapper; the token stays in the
 # token file and is not written into the plist.
+ensure_pinned_ollama_auth_proxy() {
+  local dest pin url
+  dest="${HOME}/.nemoclaw/source/scripts/ollama-auth-proxy.mts"
+  [[ -s "$dest" ]] && return 0
+  pin="1e82499a048d5a4d85b0876d8c07bd93c8a9a5de"
+  url="https://raw.githubusercontent.com/NVIDIA/NemoClaw/${pin}/scripts/ollama-auth-proxy.mts"
+  mkdir -p "${HOME}/.nemoclaw/source/scripts"
+  curl -fsSL "$url" -o "$dest" || die "could not download the pinned Ollama auth proxy"
+  [[ -s "$dest" ]] || die "downloaded Ollama auth proxy is empty"
+}
+
+ensure_node_for_auth_proxy() {
+  local bin major
+  for bin in /opt/homebrew/bin/node /opt/homebrew/opt/node@22/bin/node /usr/local/bin/node; do
+    [[ -x "$bin" ]] || continue
+    major="$("$bin" -p "process.versions.node.split('.')[0]" 2>/dev/null || true)"
+    if [[ "$major" =~ ^[0-9]+$ && "$major" -ge 22 ]]; then
+      return 0
+    fi
+  done
+  command -v brew >/dev/null || die "Homebrew is required to install Node 22 for the Ollama auth proxy"
+  brew install node@22
+}
+
 install_ollama_auth_proxy_agent() {
   local uid plist script
   [[ "$(uname -s)" == "Darwin" ]] || return 0
@@ -151,6 +175,8 @@ install_ollama_auth_proxy_agent() {
     openssl rand -hex 32 >"${HOME}/.nemoclaw/ollama-proxy-token"
   fi
   chmod 600 "${HOME}/.nemoclaw/ollama-proxy-token" || true
+  ensure_node_for_auth_proxy
+  ensure_pinned_ollama_auth_proxy
   [[ -f "${HOME}/.nemoclaw/source/scripts/ollama-auth-proxy.mts" ]] ||
     die "missing ${HOME}/.nemoclaw/source/scripts/ollama-auth-proxy.mts"
   mkdir -p "${HOME}/Library/LaunchAgents" "${HOME}/Library/Logs"
