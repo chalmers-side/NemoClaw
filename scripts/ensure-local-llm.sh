@@ -87,20 +87,7 @@ start_host_ollama() {
 </plist>
 EOF
   brew services stop ollama >/dev/null 2>&1 || true
-  launchctl bootout "gui/${uid}/com.nemoclaw.ollama" >/dev/null 2>&1 || true
-  local attempt
-  for attempt in 1 2 3; do
-    if launchctl bootstrap "gui/${uid}" "$plist"; then
-      break
-    fi
-    # bootout can still be tearing the job down; a second bootstrap then succeeds.
-    sleep 1
-    launchctl bootout "gui/${uid}/com.nemoclaw.ollama" >/dev/null 2>&1 || true
-    if [[ "$attempt" == "3" ]]; then
-      die "failed to bootstrap com.nemoclaw.ollama"
-    fi
-  done
-  launchctl enable "gui/${uid}/com.nemoclaw.ollama" >/dev/null 2>&1 || true
+  launchctl_bootstrap_gui "com.nemoclaw.ollama" "$plist"
 }
 
 pull_model() {
@@ -208,19 +195,7 @@ install_ollama_auth_proxy_agent() {
 </dict>
 </plist>
 EOF
-  launchctl bootout "gui/${uid}/com.nemoclaw.ollama-auth-proxy" >/dev/null 2>&1 || true
-  local attempt
-  for attempt in 1 2 3; do
-    if launchctl bootstrap "gui/${uid}" "$plist"; then
-      break
-    fi
-    sleep 1
-    launchctl bootout "gui/${uid}/com.nemoclaw.ollama-auth-proxy" >/dev/null 2>&1 || true
-    if [[ "$attempt" == "3" ]]; then
-      die "failed to bootstrap com.nemoclaw.ollama-auth-proxy"
-    fi
-  done
-  launchctl enable "gui/${uid}/com.nemoclaw.ollama-auth-proxy" >/dev/null 2>&1 || true
+  launchctl_bootstrap_gui "com.nemoclaw.ollama-auth-proxy" "$plist"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

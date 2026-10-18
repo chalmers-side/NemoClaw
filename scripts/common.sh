@@ -85,6 +85,27 @@ write_stage_marker() {
   printf '%s\n' "$sha" >"${dir}/${stage}"
 }
 
+# Disabled LaunchAgents fail bootstrap with "Input/output error" (5). Enable first.
+launchctl_bootstrap_gui() {
+  local label="${1:?}" plist="${2:?}" uid attempt
+  uid="$(id -u)"
+  [[ -f "$plist" ]] || die "missing LaunchAgent ${plist}"
+  launchctl enable "gui/${uid}/${label}" >/dev/null 2>&1 || true
+  launchctl bootout "gui/${uid}/${label}" >/dev/null 2>&1 || true
+  for attempt in 1 2 3 4 5; do
+    if launchctl bootstrap "gui/${uid}" "$plist"; then
+      launchctl enable "gui/${uid}/${label}" >/dev/null 2>&1 || true
+      printf 'launchctl bootstrap gui/%s/%s ok\n' "$uid" "$label"
+      return 0
+    fi
+    printf 'launchctl bootstrap %s attempt %s failed; retry\n' "$label" "$attempt"
+    sleep $((attempt))
+    launchctl enable "gui/${uid}/${label}" >/dev/null 2>&1 || true
+    launchctl bootout "gui/${uid}/${label}" >/dev/null 2>&1 || true
+  done
+  die "failed to bootstrap ${label}. Check launchctl print-disabled gui/${uid} and ${HOME}/Library/Logs."
+}
+
 deploy_lock_file() {
   printf '%s\n' "$(deploy_state_dir)/deploy.lock"
 }
@@ -543,6 +564,14 @@ ensure_homebrew_openshell_gateway() {
     gw="${bin_dir}/openshell-gateway"
   fi
   export PATH="$(dirname "$gw"):${PATH}"
+  # Recorded mTLS gateway is the path onboard and Discord already use.
+  # Do not KeepAlive a --disable-tls listener on 8080 (Actions or local).
+  if [[ -d "${HOME}/.local/state/nemoclaw/openshell-docker-gateway/tls" ]]; then
+    stop_actions_openshell_launchagent
+    launchctl bootout "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
+    ensure_recorded_tls_gateway "$gw"
+    return 0
+  fi
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
     stop_actions_openshell_launchagent
     ensure_recorded_tls_gateway "$gw"
@@ -582,9 +611,7 @@ ensure_homebrew_openshell_gateway() {
 </dict>
 </plist>
 EOF
-  launchctl bootout "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/${uid}" "$plist" || die "failed to bootstrap com.nemoclaw.openshell-gateway"
-  launchctl enable "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
+  launchctl_bootstrap_gui "com.nemoclaw.openshell-gateway" "$plist"
   for i in $(seq 1 30); do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:8080/ || true)"
     case "$code" in
@@ -691,11 +718,52 @@ ensure_recorded_tls_gateway() {
     done
     sleep 3
   fi
+  [[ -n "$cfg" && -n "${OPENSHELL_DB_URL:-}" ]] || die "recorded TLS gateway is missing gateway.toml or openshell.db"
   log="${HOME}/Library/Logs/nemoclaw-openshell-gateway-tls.log"
-  mkdir -p "${HOME}/Library/Logs"
+  mkdir -p "${HOME}/Library/Logs" "${HOME}/Library/LaunchAgents"
   : >"$log"
   printf 'starting recorded TLS openshell-gateway on 127.0.0.1:8080\n'
-  nohup "$gw" >>"$log" 2>&1 &
+  local uid plist
+  uid="$(id -u)"
+  plist="${HOME}/Library/LaunchAgents/com.nemoclaw.openshell-gateway.plist"
+  cat >"$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nemoclaw.openshell-gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${gw}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>OPENSHELL_LOCAL_TLS_DIR</key>
+    <string>${gw_state}/tls</string>
+    <key>OPENSHELL_GATEWAY_CONFIG</key>
+    <string>${cfg}</string>
+    <key>OPENSHELL_DB_URL</key>
+    <string>${OPENSHELL_DB_URL}</string>
+    <key>OPENSHELL_SERVER_PORT</key>
+    <string>8080</string>
+    <key>OPENSHELL_BIND_ADDRESS</key>
+    <string>127.0.0.1</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:${HOME}/.docker/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${log}</string>
+  <key>StandardErrorPath</key>
+  <string>${log}</string>
+</dict>
+</plist>
+EOF
+  launchctl_bootstrap_gui "com.nemoclaw.openshell-gateway" "$plist"
   for i in $(seq 1 45); do
     if openshell_is_connected; then
       printf 'recorded OpenShell gateway is Connected\n'
@@ -766,12 +834,12 @@ release_untagged_openshell_gateway() {
 # nemohermes onboard starts its own Docker-driver gateway on 127.0.0.1:8080.
 # A KeepAlive LaunchAgent takes the port back after onboard stops it.
 stop_actions_openshell_launchagent() {
-  [[ -n "${GITHUB_ACTIONS:-}" ]] || return 0
   local uid
   uid="$(id -u)"
-  launchctl bootout "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
-  launchctl disable "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
-  rm -f "${HOME}/Library/LaunchAgents/com.nemoclaw.openshell-gateway.plist"
+  # Drop a leftover --disable-tls KeepAlive agent. TLS plist is rewritten next.
+  if grep -q -- '--disable-tls' "${HOME}/Library/LaunchAgents/com.nemoclaw.openshell-gateway.plist" 2>/dev/null; then
+    launchctl bootout "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
+  fi
 }
 
 # Print the current Docker Desktop size. Does not change it.
@@ -1323,11 +1391,11 @@ classify_host_sandbox() {
   fi
   log="$(mktemp)"
   set +e
-  run_with_timeout 45 "$cli" "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1
+  run_with_timeout 90 "$cli" "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1
   rc=$?
   set -e
   if [[ "$rc" -eq 124 ]]; then
-    printf 'classify sandbox: status timed out after 45s\n' >&2
+    printf 'classify sandbox: status timed out after 90s\n' >&2
     rm -f "$log"
     printf 'unknown\n'
     return 0
@@ -1370,7 +1438,7 @@ verify_sandbox() {
     nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" connect --probe-only
   else
     command -v "$cli" >/dev/null || die "${cli} is not on PATH; install NemoClaw on this machine first"
-    run_with_timeout 45 "$cli" "$NEMOCLAW_SANDBOX_NAME" status
+    run_with_timeout 90 "$cli" "$NEMOCLAW_SANDBOX_NAME" status
     run_with_timeout 90 "$cli" "$NEMOCLAW_SANDBOX_NAME" connect --probe-only
   fi
   printf 'sandbox %s is healthy\n' "$NEMOCLAW_SANDBOX_NAME"

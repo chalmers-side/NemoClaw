@@ -256,8 +256,9 @@ host_recover_sandbox() {
   repair_sandbox_boot
   cli="$(cli_name)"
   command -v "$cli" >/dev/null || die "${cli} is not on PATH; install NemoClaw on this machine first"
-  run_with_timeout 60 "$cli" "$NEMOCLAW_SANDBOX_NAME" start || true
-  run_with_timeout 120 "$cli" "$NEMOCLAW_SANDBOX_NAME" recover || true
+  run_with_timeout 120 "$cli" "$NEMOCLAW_SANDBOX_NAME" start || true
+  run_with_timeout 300 "$cli" "$NEMOCLAW_SANDBOX_NAME" recover || true
+  ensure_recorded_tls_gateway || true
   repair_sandbox_openshell_hosts || true
   ensure_hermes_inference_placeholder || true
   ensure_hermes_discord_platform || true
