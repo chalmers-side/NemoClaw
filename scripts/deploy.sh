@@ -173,7 +173,6 @@ start_sandbox_container_if_present() {
 repair_sandbox_boot() {
   start_sandbox_container_if_present || true
   repair_sandbox_openshell_hosts || true
-  ensure_openshell_openai_inference || true
   ensure_hermes_inference_placeholder || true
 }
 
@@ -190,7 +189,6 @@ host_onboard_resume_only() {
   log="$(mktemp)"
   prepare_host_openshell_env
   require_connected_gateway
-  ensure_openshell_openai_inference || true
   state="$(classify_host_sandbox)"
   session="$(classify_onboard_session)"
   printf 'sandbox state=%s session=%s\n' "$state" "$session"
@@ -210,13 +208,9 @@ host_onboard_resume_only() {
         rm -f "$log"
         return 0
       fi
-      printf 'sandbox %s is still Error; destroy then onboard\n' "$NEMOCLAW_SANDBOX_NAME"
-      if destroy_sandbox_keep_gateway; then
-        extra=()
-      else
-        onboard_recreate_without_backup
-        extra=(--recreate-sandbox)
-      fi
+      printf 'sandbox %s is still Error; --resume without a native-home snapshot\n' "$NEMOCLAW_SANDBOX_NAME"
+      onboard_recreate_without_backup
+      extra=(--resume)
       ;;
     absent)
       case "$session" in
@@ -256,19 +250,15 @@ host_onboard_resume_only() {
   kill "$repair_pid" 2>/dev/null || true
   wait "$repair_pid" 2>/dev/null || true
   if grep -q 'Agent setup failed' "$log"; then
-    printf 'Hermes agent setup failed; repair, then destroy the not-ready sandbox and onboard again\n'
+    printf 'Hermes agent setup failed; repair hosts and --resume without replacing the create transaction\n'
     repair_sandbox_boot
     host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
     if [[ "$(classify_host_sandbox)" == "ready" ]]; then
       rm -f "$log"
       return 0
     fi
-    if destroy_sandbox_keep_gateway; then
-      extra=()
-    else
-      onboard_recreate_without_backup
-      extra=(--recreate-sandbox)
-    fi
+    onboard_recreate_without_backup
+    extra=(--resume)
     if run_host_onboard "$log" "${extra[@]}"; then
       rm -f "$log"
       return 0
