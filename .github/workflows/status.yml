@@ -30,7 +30,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clone to /opt/app
+        run: bash ./scripts/sync-install.sh
+
       - name: Status
-        run: bash ./scripts/status.sh "$TARGET"
+        run: bash /opt/app/NemoClaw/scripts/status.sh "$TARGET"
         env:
           TARGET: ${{ inputs.target }}

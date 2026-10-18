@@ -30,7 +30,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Clone to /opt/app
+        run: bash ./scripts/sync-install.sh
+
       - name: First deploy
-        run: bash ./scripts/deploy.sh "$TARGET" onboard
+        run: bash /opt/app/NemoClaw/scripts/deploy.sh "$TARGET" onboard
         env:
           TARGET: ${{ inputs.target }}

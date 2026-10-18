@@ -12,6 +12,7 @@ source "${SCRIPT_DIR}/common.sh"
 
 TARGET="${1:-}"
 load_target "$TARGET"
+assert_not_actions_worktree
 preflight_host
 
 if ! docker ps --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" --format '{{.ID}}' | grep -q .; then

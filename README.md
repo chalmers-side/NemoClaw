@@ -148,7 +148,14 @@ chmod 600 personal_config/<user>/secrets.env
 
 用編輯器填入該使用者 `config.env` 對應的 key。不要把填好的檔案 commit 回去。本機 Ollama 且沒開 Discord 可以不建這個檔。
 
-Actions 的第一次 deploy 若找不到金鑰，會在 runner 家目錄寫一份範本然後停下：`~/.nemoclaw/runner-secrets/<target>/secrets.env`（mode 600）。在那台機器上改這份檔，再重跑 workflow。不要把金鑰放進 `actions-runner/_work`，checkout 會清掉。
+Actions 會把 repo clone 到 `/opt/app/NemoClaw` 再部署，**不要**用 `actions-runner/_work` 當安裝目錄。`/opt/app` 要先在該機器建好：
+
+```bash
+sudo mkdir -p /opt/app
+sudo chown "$(whoami)":staff /opt/app
+```
+
+金鑰寫在 `/opt/app/NemoClaw/personal_config/<user>/secrets.env`（mode 600）。第一次若沒有這個檔，job 會從 example 寫一份然後停下；填好再重跑。不要把金鑰放進 `_work`。
 
 ### 3. Self-hosted runner
 
@@ -172,7 +179,7 @@ Settings → Environments → 建立與使用者同名的 environment（`chalmer
 
 ## 用 GitHub Actions 指定機器部署
 
-1. 第一次安裝：Actions → **Deploy NemoClaw**（`deploy.yml`，main 上叫這個名字）→ **Run workflow**。Branch 選 `feature/chalmers-poc`，target 選 `poc`。這條只跑 `onboard`。不要選 `main`。`First deploy` 那個 workflow 還不在 default branch，GitHub 會 Not found。
+1. 第一次安裝：Actions → **Deploy NemoClaw**（`deploy.yml`，main 上叫這個名字）→ **Run workflow**。Branch 選 `feature/chalmers-poc`，target 選 `poc`。這條只跑 `onboard`。不要選 `main`（main 仍會在 `_work` 找 secrets）。`First deploy` 那個 workflow 還不在 default branch，GitHub 會 Not found。job 會先 clone 到 `/opt/app/NemoClaw` 再 onboard。
 2. 之後更新：Actions → **Redeploy**，或 push 到 `main` / `feature*`。這條只跑 `upgrade`，不 destroy sandbox，也不拆 host gateway。sandbox 還不存在時跳過，不會失敗；先跑 **First deploy**。
 3. `poc` 只會被 `chalmers-macmini-node-1` 那台 runner 接走。
 4. 在 **Deployments** 看到對應 environment 的紀錄

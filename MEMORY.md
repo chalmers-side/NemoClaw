@@ -4,7 +4,7 @@ Ops repo for per-user NVIDIA NemoClaw deploys. Not an upstream fork. PoC target 
 
 ## GOTCHA
 
-- Actions checkout deletes gitignored files under `actions-runner/_work`. The first Actions run copies `personal_config/secrets.env.example` to `~/.nemoclaw/runner-secrets/<target>/secrets.env` mode 600 and stops. Fill that file on the runner and rerun. Later runs do not overwrite it.
+- Actions must not deploy from `actions-runner/_work`. The job clones this repo to `/opt/app/NemoClaw` and runs `deploy.sh` from there. `/opt/app` is not created by the runner (no sudo). The user runs `sudo mkdir -p /opt/app && sudo chown chalmerschang:staff /opt/app`. Secrets stay at `/opt/app/NemoClaw/personal_config/<target>/secrets.env` mode 600. Do not `git clean` that tree. If that file is missing and `~/.nemoclaw/runner-secrets/<target>/secrets.env` exists, sync copies it once.
 - Compose project names must be lowercase. `NemoClaw-poc` is rejected. Use project `nemoclaw-<user>`; container, network, and volume names can stay `NemoClaw-<user>-*`.
 - The Homebrew tap `github.com/nvidia/homebrew-openshell` returns HTTP 401 without a GitHub login, so `brew tap` from the Actions agent cannot clone it. Install the public release `https://github.com/NVIDIA/OpenShell/releases/download/v0.0.116/openshell-aarch64-apple-darwin.tar.gz` and the matching gateway tarball onto PATH.
 - `openshell gateway add --local` stores the mTLS bundle under `~/.config/openshell/gateways/<name>/`. On the Mac mini `~/.config` is `root:staff` mode 755, so the runner cannot create that directory. Do not point `XDG_CONFIG_HOME` somewhere else. The user runs `sudo chown chalmerschang:staff ~/.config && chmod u+rwx ~/.config` on the mini.

@@ -20,6 +20,7 @@ TARGET="${1:-}"
 ACTION="${2:-onboard}"
 
 load_target "$TARGET"
+assert_not_actions_worktree
 load_secrets
 validate_secrets
 preflight_host

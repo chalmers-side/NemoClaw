@@ -52,11 +52,16 @@ require_target() {
   TARGET="$target"
   CONFIG_FILE="${ROOT}/personal_config/${target}/config.env"
   [[ -f "$CONFIG_FILE" ]] || die "missing ${CONFIG_FILE}"
-  # actions/checkout wipes ignored files under _work. Keep the filled file outside that tree.
-  if [[ -z "${SECRETS_FILE:-}" && -n "${GITHUB_ACTIONS:-}" ]]; then
-    SECRETS_FILE="${HOME}/.nemoclaw/runner-secrets/${target}/secrets.env"
-  fi
   SECRETS_FILE="${SECRETS_FILE:-${ROOT}/personal_config/${target}/secrets.env}"
+}
+
+assert_not_actions_worktree() {
+  [[ -n "${GITHUB_ACTIONS:-}" ]] || return 0
+  case "$ROOT" in
+    */actions-runner/_work/*)
+      die "Actions must run from /opt/app/NemoClaw, not ${ROOT}"
+      ;;
+  esac
 }
 
 load_config() {
@@ -124,7 +129,7 @@ load_secrets() {
       die "wrote a placeholder at ${SECRETS_FILE}. Fill the keys for ${TARGET}, then rerun."
     fi
     if [[ -n "$cred" ]] || [[ -n "${DISCORD_SERVER_ID:-}" ]] || [[ "${NEMOCLAW_WEB_SEARCH_PROVIDER}" == "tavily" || "${NEMOCLAW_WEB_SEARCH_PROVIDER}" == "brave" ]]; then
-      die "missing ${SECRETS_FILE} (on the runner: ~/.nemoclaw/runner-secrets/${TARGET}/secrets.env mode 600; do not put it in the Actions _work checkout)"
+      die "missing ${SECRETS_FILE} (mode 600). Fill that file on the machine; do not put secrets in actions-runner/_work"
     fi
     printf 'no secrets file at %s (ok when this config needs no keys)\n' "$SECRETS_FILE"
     return 0
