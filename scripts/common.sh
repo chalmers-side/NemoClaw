@@ -407,18 +407,34 @@ ensure_recorded_tls_gateway() {
     printf 'recorded OpenShell gateway is already Connected\n'
     return 0
   fi
-  log="${HOME}/Library/Logs/nemoclaw-openshell-gateway.log"
+  local pid args
+  for pid in $(listener_pids 8080); do
+    args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+    case "$args" in
+      *openshell-gateway*--disable-tls*)
+        printf 'stopping plaintext openshell-gateway on 8080 so TLS can bind\n'
+        kill -TERM "$pid" || true
+        ;;
+    esac
+  done
+  sleep 2
+  if openshell_is_connected; then
+    printf 'recorded OpenShell gateway is Connected\n'
+    return 0
+  fi
+  log="${HOME}/Library/Logs/nemoclaw-openshell-gateway-tls.log"
   mkdir -p "${HOME}/Library/Logs"
+  : >"$log"
   printf 'starting recorded TLS openshell-gateway on 127.0.0.1:8080\n'
   nohup "$gw" >>"$log" 2>&1 &
-  for i in $(seq 1 30); do
+  for i in $(seq 1 45); do
     if openshell_is_connected; then
       printf 'recorded OpenShell gateway is Connected\n'
       return 0
     fi
     sleep 1
   done
-  die "OpenShell gateway did not become Connected. $(tail -n 30 "$log" 2>/dev/null || true)"
+  die "OpenShell gateway did not become Connected. $(tail -n 40 "$log" 2>/dev/null || true)"
 }
 
 # nemohermes onboard starts its own Docker-driver gateway on 127.0.0.1:8080.
