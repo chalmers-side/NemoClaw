@@ -433,14 +433,29 @@ ensure_recorded_tls_gateway() {
     return 0
   fi
   if [[ "$occupied" -eq 1 ]]; then
-    for i in $(seq 1 20); do
+    for i in $(seq 1 15); do
       if openshell_is_connected; then
         printf 'recorded OpenShell gateway is Connected\n'
         return 0
       fi
       sleep 1
     done
-    die "openshell-gateway already listens on 8080 but openshell status is not Connected. On the Mac mini run: openshell gateway select nemoclaw && openshell status"
+    printf 'openshell-gateway is on 8080 but status is not Connected; restarting the TLS listener\n'
+    {
+      printf '\n--- openshell gateway list ---\n'
+      openshell gateway list || true
+      printf '\n--- openshell status ---\n'
+      openshell status || true
+    } || true
+    for pid in $(listener_pids 8080); do
+      args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+      case "$args" in
+        *openshell-gateway*)
+          kill -TERM "$pid" || true
+          ;;
+      esac
+    done
+    sleep 3
   fi
   log="${HOME}/Library/Logs/nemoclaw-openshell-gateway-tls.log"
   mkdir -p "${HOME}/Library/Logs"
