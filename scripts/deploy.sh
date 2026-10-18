@@ -104,24 +104,22 @@ host_onboard_resume_only() {
       die "~/.config is not writable by ${USER}. On the Mac mini run: sudo chown ${USER}:staff ${HOME}/.config && chmod u+rwx ${HOME}/.config"
     fi
   fi
-  # NVIDIA docs: onboard will not delete a sandbox when its registry gateway
-  # differs from the recreate journal. destroy follows the owning registry.
-  # --fresh does not clear that record. After destroy exits 0, onboard once.
   printf 'checking the recorded gateway for %s\n' "$NEMOCLAW_SANDBOX_NAME"
-  # Command reference: start the gateway with status, then retry destroy.
-  # A transport error means presence is unknown, so destroy removes nothing.
   host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
-  printf 'destroying %s through its recorded gateway\n' "$NEMOCLAW_SANDBOX_NAME"
-  if ! host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" destroy --yes >>"$log" 2>&1; then
-    host_onboard_failure "$log"
+  local onboard_fresh=()
+  if grep -F "Sandbox '${NEMOCLAW_SANDBOX_NAME}' does not exist" "$log" >/dev/null; then
+    printf 'sandbox %s is absent; starting onboard --fresh\n' "$NEMOCLAW_SANDBOX_NAME"
+    onboard_fresh=(--fresh)
+  else
+    printf 'sandbox %s is registered; onboard will reuse it if it is ready\n' "$NEMOCLAW_SANDBOX_NAME"
   fi
-  stop_actions_openshell_launchagent
-  printf 'onboarding %s after destroy\n' "$NEMOCLAW_SANDBOX_NAME"
+  # Do not destroy on every CD run. destroy of an absent sandbox exits 1 with
+  # "does not exist"; a live sandbox would be wiped.
   if host_nemoclaw_cmd onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
     --yes \
-    --fresh \
+    "${onboard_fresh[@]}" \
     --no-ollama-autostart \
     --agent "$NEMOCLAW_AGENT" \
     --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
