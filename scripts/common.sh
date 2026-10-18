@@ -369,10 +369,14 @@ EOF
   die "OpenShell gateway did not answer on 127.0.0.1:8080. $(tail -n 30 "${HOME}/Library/Logs/nemoclaw-openshell-gateway.log" 2>/dev/null || true)"
 }
 
+openshell_status_text() {
+  openshell status 2>&1 | sed $'s/\x1b\\[[0-9;]*[[:alpha:]]//g' || true
+}
+
 openshell_is_connected() {
   local out
   command -v openshell >/dev/null 2>&1 || return 1
-  out="$(openshell status 2>&1 || true)"
+  out="$(openshell_status_text)"
   printf '%s\n' "$out" | grep -qiE 'status:[[:space:]]*connected|authenticated \(mtls'
 }
 
@@ -407,7 +411,7 @@ ensure_recorded_tls_gateway() {
   export OPENSHELL_BIND_ADDRESS="${OPENSHELL_BIND_ADDRESS:-127.0.0.1}"
   openshell gateway select nemoclaw >/dev/null 2>&1 || true
   printf 'openshell status:\n'
-  openshell status 2>&1 || true
+  openshell_status_text || true
   if openshell_is_connected; then
     printf 'recorded OpenShell gateway is already Connected\n'
     return 0
@@ -473,7 +477,7 @@ ensure_recorded_tls_gateway() {
     fi
     sleep 1
   done
-  die "OpenShell gateway did not become Connected. $(tail -n 40 "$log" 2>/dev/null || true)"
+  die "OpenShell gateway did not become Connected. status=$(openshell_status_text | tr '\n' ' '). log=$(tail -n 20 "$log" 2>/dev/null || true)"
 }
 
 # nemohermes onboard starts its own Docker-driver gateway on 127.0.0.1:8080.
