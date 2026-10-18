@@ -1161,7 +1161,7 @@ PY
   [[ "$changed" == "1" ]] || return 0
   printf 'rewrote Hermes inference placeholder in %s; restarting gateway\n' "$NEMOCLAW_SANDBOX_NAME"
   if command -v "$(cli_name)" >/dev/null; then
-    run_with_timeout 60 "$(cli_name)" "$NEMOCLAW_SANDBOX_NAME" gateway restart >/dev/null || true
+    run_with_timeout 180 "$(cli_name)" "$NEMOCLAW_SANDBOX_NAME" gateway restart >/dev/null || true
   fi
 }
 
