@@ -40,21 +40,6 @@ nemohermes_is_up() {
   command -v nemohermes >/dev/null 2>&1 && nemohermes --version >/dev/null 2>&1
 }
 
-sandbox_is_missing() {
-  local log cli
-  export PATH="/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
-  cli="$(cli_name)"
-  command -v "$cli" >/dev/null 2>&1 || return 0
-  log="$(mktemp)"
-  "$cli" "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
-  if grep -F "Sandbox '${NEMOCLAW_SANDBOX_NAME}' does not exist" "$log" >/dev/null; then
-    rm -f "$log"
-    return 0
-  fi
-  rm -f "$log"
-  return 1
-}
-
 config_value_from_text() {
   local key="$1" text="$2"
   printf '%s\n' "$text" | grep -E "^${key}=" | tail -n 1 | sed "s/^${key}=//"
@@ -144,30 +129,30 @@ else
   fi
 fi
 
-if sandbox_is_missing; then
-  NEED_SANDBOX=1
-  SANDBOX_ACTION=onboard
-  printf 'sandbox: missing; onboard\n' >&2
-elif ! read_marker sandbox >/dev/null; then
-  NEED_SANDBOX=1
-  SANDBOX_ACTION=onboard
-  printf 'sandbox: no marker; onboard\n' >&2
-else
-  SANDBOX_ACTION=upgrade
-  old="$(read_marker sandbox)"
-  if ! commit_in_repo "$old"; then
+sandbox_state="$(classify_host_sandbox)"
+printf 'sandbox state=%s\n' "$sandbox_state" >&2
+case "$sandbox_state" in
+  absent | error | unknown)
     NEED_SANDBOX=1
-    printf 'sandbox: previous SHA %s is not in this clone; upgrade\n' "$old" >&2
-  else
-    plan_from_diff sandbox "$old"
-  fi
-fi
-
-# plan_from_diff may set NEED_* from a later stage's file list; keep
-# sandbox as upgrade when the sandbox already exists.
-if ! sandbox_is_missing && [[ -f "$(deploy_state_dir)/sandbox" ]]; then
-  SANDBOX_ACTION=upgrade
-fi
+    SANDBOX_ACTION=onboard
+    printf 'sandbox: %s; onboard\n' "$sandbox_state" >&2
+    ;;
+  ready)
+    SANDBOX_ACTION=upgrade
+    if ! read_marker sandbox >/dev/null; then
+      NEED_SANDBOX=1
+      printf 'sandbox: ready with no marker; upgrade\n' >&2
+    else
+      old="$(read_marker sandbox)"
+      if ! commit_in_repo "$old"; then
+        NEED_SANDBOX=1
+        printf 'sandbox: previous SHA %s is not in this clone; upgrade\n' "$old" >&2
+      else
+        plan_from_diff sandbox "$old"
+      fi
+    fi
+    ;;
+esac
 
 actions=()
 if [[ "$NEED_OLLAMA" -eq 1 ]]; then

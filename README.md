@@ -257,7 +257,7 @@ NemoClaw 可能改用 `18789`–`18799` 的下一個空 port；以 `dashboard-ur
 
 ## 故障
 
-- Onboard 中斷：注入同一組本機金鑰後再跑 `bash ./scripts/deploy.sh <user> onboard`。不要隨便加 `--fresh`，那會丟已存的非機密選擇。
+- Onboard 依 sandbox 狀態選 `--resume` / `--fresh` / `destroy --no-cleanup-gateway`。Ready 不重裝。不要手動亂加 `--fresh`。
 - `status` 失敗：先看 compose 是否在跑，再看 `nemoclaw <sandbox-name> status` 的 failure layer。
 - 不要把 dashboard URL、gateway token、API key 貼進 issue、PR 或 Actions 註解。
 

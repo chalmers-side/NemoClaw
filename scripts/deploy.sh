@@ -92,9 +92,8 @@ host_onboard_failure() {
   die "onboard failed for ${NEMOCLAW_SANDBOX_NAME}. ${reason:-$(tail -c 800 "$log")}"
 }
 
-host_onboard_resume_only() {
-  local log bin_dir
-  log="$(mktemp)"
+prepare_host_openshell_env() {
+  local bin_dir gw_state
   mkdir -p "${HOME}/.nemoclaw"
   chmod 700 "${HOME}/.nemoclaw"
   bin_dir="${HOME}/.nemoclaw/openshell/bin"
@@ -103,35 +102,111 @@ host_onboard_resume_only() {
     export NEMOCLAW_OPENSHELL_GATEWAY_BIN="${bin_dir}/openshell-gateway"
     export PATH="${bin_dir}:${PATH}"
   fi
+  export PATH="/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
+  gw_state="${HOME}/.local/state/nemoclaw/openshell-docker-gateway"
+  export OPENSHELL_LOCAL_TLS_DIR="${gw_state}/tls"
+  if [[ -f "${gw_state}/openshell-gateway.toml" ]]; then
+    export OPENSHELL_GATEWAY_CONFIG="${gw_state}/openshell-gateway.toml"
+  fi
+  if [[ -f "${gw_state}/openshell.db" ]]; then
+    export OPENSHELL_DB_URL="sqlite:${gw_state}/openshell.db"
+  fi
+  export OPENSHELL_SERVER_PORT="${OPENSHELL_SERVER_PORT:-8080}"
+  export NEMOCLAW_GATEWAY_PORT="${NEMOCLAW_GATEWAY_PORT:-8080}"
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
     export DOCKER_CONFIG="$(mktemp -d)"
     printf '%s\n' '{}' >"${DOCKER_CONFIG}/config.json"
-    # The CLI only finds mTLS certs via OPENSHELL_LOCAL_TLS_DIR. The gateway
-    # writes them under its state dir, which is not the CLI default.
-    export OPENSHELL_LOCAL_TLS_DIR="${HOME}/.local/state/nemoclaw/openshell-docker-gateway/tls"
     if [[ ! -w "${HOME}/.config" ]]; then
       die "~/.config is not writable by ${USER}. On the Mac mini run: sudo chown ${USER}:staff ${HOME}/.config && chmod u+rwx ${HOME}/.config"
     fi
   fi
-  printf 'checking the recorded gateway for %s\n' "$NEMOCLAW_SANDBOX_NAME"
-  host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
-  local onboard_fresh=()
-  if grep -F "Sandbox '${NEMOCLAW_SANDBOX_NAME}' does not exist" "$log" >/dev/null; then
-    printf 'sandbox %s is absent; starting onboard --fresh\n' "$NEMOCLAW_SANDBOX_NAME"
-    onboard_fresh=(--fresh)
-  else
-    printf 'sandbox %s is registered; onboard will reuse it if it is ready\n' "$NEMOCLAW_SANDBOX_NAME"
+}
+
+require_connected_gateway() {
+  local gw_state="${HOME}/.local/state/nemoclaw/openshell-docker-gateway"
+  if ! openshell status 2>/dev/null | grep -q 'Status: Connected'; then
+    die "OpenShell gateway is not Connected on 127.0.0.1:8080. On the Mac mini start openshell-gateway with OPENSHELL_LOCAL_TLS_DIR, OPENSHELL_GATEWAY_CONFIG, and OPENSHELL_DB_URL under ${gw_state}. Do not pass --disable-tls, and do not destroy the gateway. Then rerun sandbox onboard."
   fi
-  # Do not destroy on every CD run. destroy of an absent sandbox exits 1 with
-  # "does not exist"; a live sandbox would be wiped.
+}
+
+run_host_onboard() {
+  local log="$1"
+  shift
   if host_nemoclaw_cmd onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
     --yes \
-    "${onboard_fresh[@]}" \
+    "$@" \
     --no-ollama-autostart \
     --agent "$NEMOCLAW_AGENT" \
     --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+destroy_sandbox_keep_gateway() {
+  local cid
+  printf 'destroying sandbox %s; keeping the host gateway\n' "$NEMOCLAW_SANDBOX_NAME"
+  cid="$(docker ps -aq --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" 2>/dev/null || true)"
+  cid="${cid%%$'\n'*}"
+  if [[ -n "$cid" ]]; then
+    docker start "$cid" >/dev/null 2>&1 || true
+  fi
+  host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" destroy --yes --no-cleanup-gateway \
+    || die "destroy failed for ${NEMOCLAW_SANDBOX_NAME}. Start the sandbox container then rerun. Do not kill -9, and do not omit --no-cleanup-gateway."
+}
+
+host_onboard_resume_only() {
+  local log state session extra=()
+  log="$(mktemp)"
+  prepare_host_openshell_env
+  require_connected_gateway
+  state="$(classify_host_sandbox)"
+  session="$(classify_onboard_session)"
+  printf 'sandbox state=%s session=%s\n' "$state" "$session"
+  case "$state" in
+    ready)
+      printf 'sandbox %s is ready; skip onboard\n' "$NEMOCLAW_SANDBOX_NAME"
+      rm -f "$log"
+      return 0
+      ;;
+    error)
+      printf 'sandbox %s is Error; destroy then onboard\n' "$NEMOCLAW_SANDBOX_NAME"
+      destroy_sandbox_keep_gateway
+      session="$(classify_onboard_session)"
+      case "$session" in
+        resumable) extra=(--resume) ;;
+        stale) extra=(--fresh) ;;
+        *) extra=() ;;
+      esac
+      ;;
+    absent)
+      case "$session" in
+        resumable)
+          printf 'interrupted onboard; --resume\n'
+          extra=(--resume)
+          ;;
+        stale)
+          printf 'stale onboard session and no sandbox; --fresh\n'
+          extra=(--fresh)
+          ;;
+        *)
+          printf 'no sandbox; onboard on the Connected gateway\n'
+          extra=()
+          ;;
+      esac
+      ;;
+    unknown)
+      if [[ "$session" == "resumable" ]]; then
+        printf 'sandbox state unknown; --resume interrupted onboard\n'
+        extra=(--resume)
+      else
+        die "sandbox ${NEMOCLAW_SANDBOX_NAME} status is not Ready/Error/absent. Inspect it before onboard, destroy, or --fresh."
+      fi
+      ;;
+  esac
+  if run_host_onboard "$log" "${extra[@]}"; then
     rm -f "$log"
     return 0
   fi

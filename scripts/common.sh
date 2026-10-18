@@ -870,6 +870,79 @@ host_nemoclaw_cmd() {
   "$cli" "$@"
 }
 
+onboard_session_file() {
+  local f
+  for f in \
+    "${HOME}/.nemoclaw/onboard-session.json" \
+    "${HOME}"/.nemoclaw/*/onboard-session.json \
+    "${HOME}"/.nemoclaw/gateways/*/onboard-session.json
+  do
+    if [[ -f "$f" ]]; then
+      printf '%s\n' "$f"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# none | resumable | stale
+classify_onboard_session() {
+  local file status
+  file="$(onboard_session_file || true)"
+  [[ -n "$file" ]] || { printf 'none\n'; return 0; }
+  status="$(python3 -c '
+import json, sys
+path = sys.argv[1]
+try:
+    data = json.load(open(path))
+except Exception:
+    print("stale")
+    raise SystemExit
+raw = data.get("status") or data.get("state") or data.get("phase") or ""
+if data.get("resumable") is True:
+    print("resumable")
+    raise SystemExit
+text = str(raw).lower()
+if text in ("in_progress", "in-progress", "interrupted", "incomplete"):
+    print("resumable")
+elif text in ("complete", "completed", "success"):
+    print("none")
+else:
+    print("stale")
+' "$file" 2>/dev/null || printf 'stale\n')"
+  printf '%s\n' "$status"
+}
+
+# absent | error | ready | unknown
+classify_host_sandbox() {
+  local cli log
+  export PATH="/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
+  cli="$(cli_name)"
+  if ! command -v "$cli" >/dev/null 2>&1; then
+    printf 'absent\n'
+    return 0
+  fi
+  log="$(mktemp)"
+  "$cli" "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
+  if grep -F "Sandbox '${NEMOCLAW_SANDBOX_NAME}' does not exist" "$log" >/dev/null; then
+    rm -f "$log"
+    printf 'absent\n'
+    return 0
+  fi
+  if grep -Ei 'phase[: ]+error|status[: ]+error|sandbox phase: error' "$log" >/dev/null; then
+    rm -f "$log"
+    printf 'error\n'
+    return 0
+  fi
+  if grep -Ei 'phase[: ]+ready|status[: ]+ready|inference healthy|result=ready' "$log" >/dev/null; then
+    rm -f "$log"
+    printf 'ready\n'
+    return 0
+  fi
+  rm -f "$log"
+  printf 'unknown\n'
+}
+
 verify_sandbox() {
   printf 'verifying sandbox %s\n' "$NEMOCLAW_SANDBOX_NAME"
   repair_sandbox_openshell_hosts
