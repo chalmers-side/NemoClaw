@@ -132,6 +132,16 @@ host_onboard_resume_only() {
 }
 
 host_upgrade_sandboxes() {
+  local log
+  log="$(mktemp)"
+  printf 'checking whether %s exists before upgrade\n' "$NEMOCLAW_SANDBOX_NAME"
+  host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
+  if grep -F "Sandbox '${NEMOCLAW_SANDBOX_NAME}' does not exist" "$log" >/dev/null; then
+    printf 'sandbox %s is not installed; skip upgrade. Run workflow First deploy once.\n' "$NEMOCLAW_SANDBOX_NAME"
+    rm -f "$log"
+    return 1
+  fi
+  rm -f "$log"
   printf 'upgrading sandboxes; Hermes state volume is left in place\n'
   host_nemoclaw_cmd upgrade-sandboxes --check || true
 }
@@ -162,10 +172,16 @@ if ollama_on_host; then
     install_macos_bridge_boot_daemon
   fi
   case "$ACTION" in
-    onboard) host_onboard_resume_only ;;
-    upgrade) host_upgrade_sandboxes ;;
+    onboard)
+      host_onboard_resume_only
+      verify_sandbox
+      ;;
+    upgrade)
+      if host_upgrade_sandboxes; then
+        verify_sandbox
+      fi
+      ;;
   esac
-  verify_sandbox
   printf 'host stack is up for %s\n' "$TARGET"
 else
   free_compose_ports
