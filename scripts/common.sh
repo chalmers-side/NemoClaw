@@ -1071,6 +1071,7 @@ ensure_hermes_inference_placeholder() {
   changed="$(docker exec -i -u sandbox -e NEMOCLAW_MODEL="${NEMOCLAW_MODEL:-}" "$cid" python3 - <<'PY'
 import json
 import os
+import re
 from pathlib import Path
 
 p = Path("/sandbox/.hermes/config.yaml")
@@ -1079,10 +1080,24 @@ model = os.environ.get("NEMOCLAW_MODEL", "")
 if not p.exists():
     print("0")
     raise SystemExit
+raw = p.read_text()
 try:
-    data = json.loads(p.read_text())
+    data = json.loads(raw)
 except json.JSONDecodeError:
-    print("0")
+    text = raw
+    orig = text
+    text = re.sub(
+        r"openshell:resolve:env:\S+_NEMOCLAW_LOCAL_INFERENCE_TOKEN",
+        placeholder,
+        text,
+    )
+    if model:
+        text = re.sub(r"\bqwen[\w.]+:[\w.-]+\b", model, text)
+    if text != orig:
+        p.write_text(text)
+        print("1")
+    else:
+        print("0")
     raise SystemExit
 
 changed = False
@@ -1146,7 +1161,7 @@ PY
   [[ "$changed" == "1" ]] || return 0
   printf 'rewrote Hermes inference placeholder in %s; restarting gateway\n' "$NEMOCLAW_SANDBOX_NAME"
   if command -v "$(cli_name)" >/dev/null; then
-    host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" gateway restart >/dev/null
+    run_with_timeout 60 "$(cli_name)" "$NEMOCLAW_SANDBOX_NAME" gateway restart >/dev/null || true
   fi
 }
 
@@ -1398,7 +1413,7 @@ classify_host_sandbox() {
       return 0
     fi
     if [[ "$rc" -eq 0 ]] || grep -qiE 'Phase:' "$log"; then
-      phase="$(grep -Ei '^[[:space:]]*Phase:' "$log" | tail -n 1 | awk '{print tolower($2)}')"
+      phase="$(sed $'s/\x1b\\[[0-9;]*[[:alpha:]]//g' "$log" | grep -Ei '^[[:space:]]*Phase:' | tail -n 1 | awk '{print tolower($2)}' || true)"
       rm -f "$log"
       case "$phase" in
         ready) printf 'ready\n'; return 0 ;;
