@@ -203,6 +203,10 @@ host_onboard_resume_only() {
       fi
       ;;
   esac
+  if [[ "${extra[*]:-}" == *"--fresh"* ]] && openshell_is_connected; then
+    printf 'gateway is Connected; not passing --fresh (it fights 8080). Using --resume\n'
+    extra=(--resume)
+  fi
   if run_host_onboard "$log" "${extra[@]}"; then
     rm -f "$log"
     return 0
