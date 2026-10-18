@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Deploy one personal_config target.
-# Usage: ./scripts/deploy.sh <target> [onboard|upgrade]
-# onboard = first install. upgrade = later redeploy. Do not destroy the
-# sandbox or the host gateway on upgrade.
+# Deploy one personal_config target, one stage at a time.
+# Usage: ./scripts/deploy.sh <target> <ollama|nemoclaw|onboard|upgrade>
+#   ollama    host Ollama LaunchAgent + model pull
+#   nemoclaw  OpenShell gateway, nemohermes CLI, auth proxy
+#   onboard   first sandbox install
+#   upgrade   later sandbox redeploy; does not destroy sandbox or gateway
 #
 # Secrets are read from personal_config/<target>/secrets.env (gitignored).
 # Do not enable xtrace; keys must not enter logs.
@@ -17,7 +19,8 @@ source "${SCRIPT_DIR}/common.sh"
 trap unset_secrets EXIT
 
 TARGET="${1:-}"
-ACTION="${2:-onboard}"
+ACTION="${2:-}"
+[[ -n "$ACTION" ]] || die "usage: $0 <target> <ollama|nemoclaw|onboard|upgrade>"
 
 load_target "$TARGET"
 assert_not_actions_worktree
@@ -26,8 +29,11 @@ validate_secrets
 preflight_host
 
 case "$ACTION" in
-  onboard | upgrade) ;;
-  *) die "unknown action '${ACTION}' (expected onboard or upgrade)" ;;
+  sandbox) ACTION=onboard ;;
+esac
+case "$ACTION" in
+  ollama | nemoclaw | onboard | upgrade) ;;
+  *) die "unknown action '${ACTION}' (expected ollama, nemoclaw, onboard, or upgrade)" ;;
 esac
 
 # shellcheck source=scripts/ensure-local-llm.sh
@@ -138,7 +144,7 @@ host_upgrade_sandboxes() {
   printf 'checking whether %s exists before upgrade\n' "$NEMOCLAW_SANDBOX_NAME"
   host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
   if grep -F "Sandbox '${NEMOCLAW_SANDBOX_NAME}' does not exist" "$log" >/dev/null; then
-    printf 'sandbox %s is not installed; skip upgrade. Run workflow First deploy once.\n' "$NEMOCLAW_SANDBOX_NAME"
+    printf 'sandbox %s is not installed; skip upgrade. Run stage sandbox (onboard) once.\n' "$NEMOCLAW_SANDBOX_NAME"
     rm -f "$log"
     return 1
   fi
@@ -162,34 +168,80 @@ wait_for_controller() {
   die "NemoClaw controller did not finish onboard for ${NEMOCLAW_SANDBOX_NAME}"
 }
 
-if ollama_on_host; then
-  printf 'starting host Ollama path for %s (%s)\n' "$TARGET" "$ACTION"
+require_host_ollama() {
+  ollama_http_ok || die "Ollama is not up on 127.0.0.1:11434. Run stage ollama first."
+}
+
+require_host_nemoclaw() {
+  export PATH="/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
+  if command -v nemohermes >/dev/null 2>&1 && nemohermes --version >/dev/null 2>&1; then
+    return 0
+  fi
+  die "nemohermes is not installed. Run stage nemoclaw first."
+}
+
+deploy_host_ollama() {
+  printf 'stage ollama for %s\n' "$TARGET"
+  ensure_local_llm
+  printf 'Ollama is up for %s\n' "$TARGET"
+}
+
+deploy_host_nemoclaw() {
+  printf 'stage nemoclaw for %s\n' "$TARGET"
   report_docker_desktop_budget
   ensure_homebrew_openshell_gateway
-  ensure_local_llm
   ensure_host_nemohermes
   install_ollama_auth_proxy_agent
   if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
     install_macos_bridge_boot_daemon
   fi
+  printf 'NemoClaw host tools are up for %s\n' "$TARGET"
+}
+
+deploy_host_sandbox() {
+  require_host_ollama
+  require_host_nemoclaw
   case "$ACTION" in
     onboard)
+      printf 'stage sandbox onboard for %s\n' "$TARGET"
       host_onboard_resume_only
       verify_sandbox
       ;;
     upgrade)
+      printf 'stage sandbox upgrade for %s\n' "$TARGET"
       if host_upgrade_sandboxes; then
         verify_sandbox
       fi
       ;;
   esac
-  printf 'host stack is up for %s\n' "$TARGET"
+  printf 'sandbox stage finished for %s\n' "$TARGET"
+}
+
+if ollama_on_host; then
+  case "$ACTION" in
+    ollama) deploy_host_ollama ;;
+    nemoclaw) deploy_host_nemoclaw ;;
+    onboard | upgrade) deploy_host_sandbox ;;
+  esac
 else
-  free_compose_ports
-  printf 'starting compose stack for %s (%s)\n' "$TARGET" "$ACTION"
-  run_compose up -d --build init gateway ollama
-  ensure_local_llm
-  run_compose up -d --build --force-recreate nemoclaw
-  wait_for_controller
-  printf 'compose stack is up for %s\n' "$TARGET"
+  case "$ACTION" in
+    ollama)
+      printf 'stage ollama (compose) for %s\n' "$TARGET"
+      run_compose up -d --build init ollama
+      ensure_local_llm
+      printf 'compose Ollama is up for %s\n' "$TARGET"
+      ;;
+    nemoclaw)
+      printf 'stage nemoclaw (compose) for %s\n' "$TARGET"
+      free_compose_ports
+      run_compose up -d --build init gateway
+      run_compose up -d --build --force-recreate nemoclaw
+      printf 'compose NemoClaw controller started for %s\n' "$TARGET"
+      ;;
+    onboard | upgrade)
+      printf 'stage sandbox (compose) for %s\n' "$TARGET"
+      wait_for_controller
+      printf 'compose sandbox stage finished for %s\n' "$TARGET"
+      ;;
+  esac
 fi

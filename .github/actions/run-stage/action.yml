@@ -1,0 +1,19 @@
+name: Run deploy stage
+description: Sync /opt/app/NemoClaw then run one deploy action from that tree
+inputs:
+  target:
+    required: true
+  action:
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Clone to /opt/app
+      shell: bash
+      run: bash "${GITHUB_WORKSPACE}/scripts/sync-install.sh"
+    - name: Deploy ${{ inputs.action }}
+      shell: bash
+      run: bash /opt/app/NemoClaw/scripts/deploy.sh "$TARGET" "$ACTION"
+      env:
+        TARGET: ${{ inputs.target }}
+        ACTION: ${{ inputs.action }}

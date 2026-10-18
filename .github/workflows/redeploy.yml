@@ -36,10 +36,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Clone to /opt/app
-        run: bash ./scripts/sync-install.sh
-
-      - name: Redeploy
-        run: bash /opt/app/NemoClaw/scripts/deploy.sh "$TARGET" upgrade
-        env:
-          TARGET: ${{ inputs.target || 'poc' }}
+      - name: Run stage
+        uses: ./.github/actions/run-stage
+        with:
+          target: ${{ inputs.target || 'poc' }}
+          action: upgrade

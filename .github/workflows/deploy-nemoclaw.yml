@@ -1,0 +1,36 @@
+name: Deploy NemoClaw host
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Machine (personal_config directory name)
+        required: true
+        type: choice
+        options:
+          - poc
+          - chalmers
+          - cliff
+
+concurrency:
+  group: nemoclaw-${{ inputs.target }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  nemoclaw:
+    name: NemoClaw ${{ inputs.target }}
+    runs-on: ${{ fromJSON(inputs.target == 'poc' && '["self-hosted", "macOS", "ARM64", "chalmers-macmini-node-1"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target)) }}
+    environment: ${{ inputs.target }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run stage
+        uses: ./.github/actions/run-stage
+        with:
+          target: ${{ inputs.target }}
+          action: nemoclaw

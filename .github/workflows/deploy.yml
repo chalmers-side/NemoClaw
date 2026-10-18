@@ -1,19 +1,26 @@
 name: Deploy NemoClaw
 
 # Same path as main's workflow so the Actions button exists.
-# GitHub only lists workflow_dispatch files that are on the default branch.
-# This file on feature/chalmers-poc is first install (onboard), not upgrade.
+# Pick one stage. Do not run Ollama, NemoClaw, and sandbox in the same job.
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: Machine to install (personal_config directory name)
+        description: Machine (personal_config directory name)
         required: true
         type: choice
         options:
           - poc
           - chalmers
           - cliff
+      stage:
+        description: ollama, NemoClaw host tools, or sandbox first install
+        required: true
+        type: choice
+        options:
+          - ollama
+          - nemoclaw
+          - sandbox
 
 concurrency:
   group: nemoclaw-${{ inputs.target }}
@@ -23,9 +30,8 @@ permissions:
   contents: read
 
 jobs:
-  first-deploy:
-    name: First deploy ${{ inputs.target }}
-    # poc runs on the Mac mini runner. Other targets stay on nemoclaw,<user>.
+  deploy:
+    name: ${{ inputs.stage }} ${{ inputs.target }}
     runs-on: ${{ fromJSON(inputs.target == 'poc' && '["self-hosted", "macOS", "ARM64", "chalmers-macmini-node-1"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target)) }}
     environment: ${{ inputs.target }}
     timeout-minutes: 120
@@ -33,10 +39,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Clone to /opt/app
-        run: bash ./scripts/sync-install.sh
-
-      - name: First deploy
-        run: bash /opt/app/NemoClaw/scripts/deploy.sh "$TARGET" onboard
-        env:
-          TARGET: ${{ inputs.target }}
+      - name: Run stage
+        uses: ./.github/actions/run-stage
+        with:
+          target: ${{ inputs.target }}
+          action: ${{ inputs.stage }}
