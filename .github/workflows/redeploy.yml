@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: Machine to upgrade (personal_config directory name)
+        description: Machine to deploy (personal_config directory name)
         required: true
         type: choice
         options:
@@ -27,7 +27,7 @@ permissions:
 jobs:
   redeploy:
     name: Redeploy ${{ inputs.target || 'poc' }}
-    # Push to main or feature* upgrades poc. A manual run still picks the target.
+    # Push to main or feature* plans stages from git diff. A manual run still picks the target.
     # poc runs on the Mac mini runner. Other targets stay on nemoclaw,<user>.
     runs-on: ${{ fromJSON((inputs.target || 'poc') == 'poc' && '["self-hosted", "macOS", "ARM64", "chalmers-macmini-node-1"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target || 'poc')) }}
     environment: ${{ inputs.target || 'poc' }}
@@ -35,9 +35,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Run stage
         uses: ./.github/actions/run-stage
         with:
           target: ${{ inputs.target || 'poc' }}
-          action: upgrade
+          action: auto

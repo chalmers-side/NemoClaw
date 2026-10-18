@@ -53,13 +53,13 @@ GitHub Actions (選機器)
 3. 部署：
 
 ```bash
-bash ./scripts/deploy.sh poc ollama
-bash ./scripts/deploy.sh poc nemoclaw
-bash ./scripts/deploy.sh poc onboard
+bash ./scripts/run-planned-deploy.sh poc
 bash ./scripts/status.sh poc
 ```
 
-macOS 且 provider 是 Ollama 時，三個 stage 分開跑：`ollama` 只管本機 Ollama，`nemoclaw` 只管 gateway / `nemohermes` / `:11435` auth proxy，`onboard` / `upgrade` 只動 sandbox。resume 失敗就停，不會再建一個 sandbox。`upgrade` 只跑 `upgrade-sandboxes`，不刪 Hermes volume，也不重啟 Ollama。Linux 目標仍走 compose。
+或手動指定 stage：`bash ./scripts/deploy.sh poc ollama` / `nemoclaw` / `onboard`。
+
+macOS 且 provider 是 Ollama 時，三個 stage 分開跑：`ollama` 只管本機 Ollama，`nemoclaw` 只管 gateway / `nemohermes` / `:11435` auth proxy，`onboard` / `upgrade` 只動 sandbox。第一次（沒有 `~/.nemoclaw/deploy-state/<target>/<stage>` 或服務還沒裝好）會依序跑完。之後只 rebuild diff 打到的 stage。resume 失敗就停，不會再建一個 sandbox。`upgrade` 只跑 `upgrade-sandboxes`，不刪 Hermes volume，也不重啟 Ollama。Linux 目標仍走 compose。
 
 服務分工：
 
@@ -181,8 +181,8 @@ Settings → Environments → 建立與使用者同名的 environment（`chalmer
 
 ## 用 GitHub Actions 指定機器部署
 
-1. 用 Actions → **Deploy NemoClaw**（`deploy.yml`）。Branch 選 `feature/chalmers-poc`，target 選 `poc`，**stage 一次只選一個**：`ollama` → `nemoclaw` → `sandbox`。不要選 `main`。job 先 clone 到 `/opt/app/NemoClaw` 再跑該 stage。
-2. 之後更新 sandbox：Actions → **Redeploy**，或 push 到 `main` / `feature*`。這條只跑 `upgrade`，不重啟 Ollama、不重建 nemohermes、不 destroy sandbox。sandbox 還不存在時跳過。
+1. 用 Actions → **Deploy NemoClaw**（`deploy.yml`）。Branch 選 `feature/chalmers-poc`，target 選 `poc`。stage 選 **`auto`**（第一次完整部署，之後看 diff）或 force `ollama` / `nemoclaw` / `sandbox`。不要選 `main`。job 先 clone 到 `/opt/app/NemoClaw`。
+2. push 到 `main` / `feature*` 跑 **Redeploy**，同樣是 `auto`：沒裝過就全跑，docs-only 的 commit 會 skip，不會重啟 Ollama 或 destroy sandbox。
 3. `poc` 只會被 `chalmers-macmini-node-1` 那台 runner 接走。
 4. 在 **Deployments** 看到對應 environment 的紀錄
 

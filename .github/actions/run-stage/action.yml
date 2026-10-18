@@ -13,7 +13,12 @@ runs:
       run: bash "${GITHUB_WORKSPACE}/scripts/sync-install.sh"
     - name: Deploy ${{ inputs.action }}
       shell: bash
-      run: bash /opt/app/NemoClaw/scripts/deploy.sh "$TARGET" "$ACTION"
+      run: |
+        if [[ "$ACTION" == "auto" ]]; then
+          bash /opt/app/NemoClaw/scripts/run-planned-deploy.sh "$TARGET"
+        else
+          bash /opt/app/NemoClaw/scripts/deploy.sh "$TARGET" "$ACTION"
+        fi
       env:
         TARGET: ${{ inputs.target }}
         ACTION: ${{ inputs.action }}

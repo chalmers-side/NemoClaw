@@ -64,6 +64,27 @@ assert_not_actions_worktree() {
   esac
 }
 
+deploy_state_dir() {
+  printf '%s\n' "${HOME}/.nemoclaw/deploy-state/${TARGET:?}"
+}
+
+current_deploy_sha() {
+  if [[ -n "${GITHUB_SHA:-}" ]]; then
+    printf '%s\n' "$GITHUB_SHA"
+    return 0
+  fi
+  git -C "$ROOT" rev-parse HEAD
+}
+
+write_stage_marker() {
+  local stage="${1:?}" dir sha
+  dir="$(deploy_state_dir)"
+  sha="$(current_deploy_sha)"
+  mkdir -p "$dir"
+  chmod 700 "${HOME}/.nemoclaw" "$(dirname "$dir")" "$dir" 2>/dev/null || true
+  printf '%s\n' "$sha" >"${dir}/${stage}"
+}
+
 load_config() {
   set -a
   # shellcheck disable=SC1090

@@ -183,6 +183,7 @@ require_host_nemoclaw() {
 deploy_host_ollama() {
   printf 'stage ollama for %s\n' "$TARGET"
   ensure_local_llm
+  write_stage_marker ollama
   printf 'Ollama is up for %s\n' "$TARGET"
 }
 
@@ -195,6 +196,7 @@ deploy_host_nemoclaw() {
   if [[ -z "${GITHUB_ACTIONS:-}" ]]; then
     install_macos_bridge_boot_daemon
   fi
+  write_stage_marker nemoclaw
   printf 'NemoClaw host tools are up for %s\n' "$TARGET"
 }
 
@@ -206,11 +208,13 @@ deploy_host_sandbox() {
       printf 'stage sandbox onboard for %s\n' "$TARGET"
       host_onboard_resume_only
       verify_sandbox
+      write_stage_marker sandbox
       ;;
     upgrade)
       printf 'stage sandbox upgrade for %s\n' "$TARGET"
       if host_upgrade_sandboxes; then
         verify_sandbox
+        write_stage_marker sandbox
       fi
       ;;
   esac
@@ -229,6 +233,7 @@ else
       printf 'stage ollama (compose) for %s\n' "$TARGET"
       run_compose up -d --build init ollama
       ensure_local_llm
+      write_stage_marker ollama
       printf 'compose Ollama is up for %s\n' "$TARGET"
       ;;
     nemoclaw)
@@ -236,11 +241,13 @@ else
       free_compose_ports
       run_compose up -d --build init gateway
       run_compose up -d --build --force-recreate nemoclaw
+      write_stage_marker nemoclaw
       printf 'compose NemoClaw controller started for %s\n' "$TARGET"
       ;;
     onboard | upgrade)
       printf 'stage sandbox (compose) for %s\n' "$TARGET"
       wait_for_controller
+      write_stage_marker sandbox
       printf 'compose sandbox stage finished for %s\n' "$TARGET"
       ;;
   esac

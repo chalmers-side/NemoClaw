@@ -1,7 +1,7 @@
 name: Deploy NemoClaw
 
 # Same path as main's workflow so the Actions button exists.
-# Pick one stage. Do not run Ollama, NemoClaw, and sandbox in the same job.
+# auto = first full deploy or later rebuild from git diff. Other values force one stage.
 on:
   workflow_dispatch:
     inputs:
@@ -14,10 +14,11 @@ on:
           - chalmers
           - cliff
       stage:
-        description: ollama, NemoClaw host tools, or sandbox first install
+        description: auto from diff, or force one stage
         required: true
         type: choice
         options:
+          - auto
           - ollama
           - nemoclaw
           - sandbox
@@ -38,6 +39,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Run stage
         uses: ./.github/actions/run-stage
