@@ -104,15 +104,15 @@ host_onboard_resume_only() {
       die "~/.config is not writable by ${USER}. On the Mac mini run: sudo chown ${USER}:staff ${HOME}/.config && chmod u+rwx ${HOME}/.config"
     fi
   fi
-  printf 'starting a new onboarding session for %s\n' "$NEMOCLAW_SANDBOX_NAME"
-  # Do not delete the sandbox and do not call openshell before onboard.
-  # A recreate delete is refused when the registry gateway does not match
-  # the transaction, and this runner has no sudo to repair that.
-  if host_nemoclaw_cmd onboard \
+  printf 'resuming onboarding for %s\n' "$NEMOCLAW_SANDBOX_NAME"
+  # The sandbox is not ready, so the workspace snapshot cannot SSH in.
+  # Resume the failed session and skip that snapshot. A new --fresh records
+  # a different gateway and NemoClaw then refuses to delete the sandbox.
+  if NEMOCLAW_RECREATE_WITHOUT_BACKUP=1 host_nemoclaw_cmd onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
     --yes \
-    --fresh \
+    --resume \
     --no-ollama-autostart \
     --agent "$NEMOCLAW_AGENT" \
     --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
