@@ -150,8 +150,16 @@ destroy_sandbox_keep_gateway() {
   if [[ -n "$cid" ]]; then
     docker start "$cid" >/dev/null 2>&1 || true
   fi
-  host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" destroy --yes --no-cleanup-gateway \
-    || die "destroy failed for ${NEMOCLAW_SANDBOX_NAME}. Start the sandbox container then rerun. Do not kill -9, and do not omit --no-cleanup-gateway."
+  if host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" destroy --yes --no-cleanup-gateway; then
+    return 0
+  fi
+  printf 'destroy did not finish for %s; onboard will --recreate-sandbox without a native-home backup\n' "$NEMOCLAW_SANDBOX_NAME"
+  return 1
+}
+
+onboard_recreate_without_backup() {
+  export NEMOCLAW_RECREATE_SANDBOX=1
+  export NEMOCLAW_RECREATE_WITHOUT_BACKUP=1
 }
 
 start_sandbox_container_if_present() {
@@ -203,8 +211,12 @@ host_onboard_resume_only() {
         return 0
       fi
       printf 'sandbox %s is still Error; destroy then onboard\n' "$NEMOCLAW_SANDBOX_NAME"
-      destroy_sandbox_keep_gateway
-      extra=()
+      if destroy_sandbox_keep_gateway; then
+        extra=()
+      else
+        onboard_recreate_without_backup
+        extra=(--recreate-sandbox)
+      fi
       ;;
     absent)
       case "$session" in
@@ -251,8 +263,13 @@ host_onboard_resume_only() {
       rm -f "$log"
       return 0
     fi
-    destroy_sandbox_keep_gateway
-    if run_host_onboard "$log"; then
+    if destroy_sandbox_keep_gateway; then
+      extra=()
+    else
+      onboard_recreate_without_backup
+      extra=(--recreate-sandbox)
+    fi
+    if run_host_onboard "$log" "${extra[@]}"; then
       rm -f "$log"
       return 0
     fi
