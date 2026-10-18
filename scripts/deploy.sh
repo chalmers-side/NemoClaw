@@ -107,8 +107,12 @@ host_onboard_resume_only() {
   # NVIDIA docs: onboard will not delete a sandbox when its registry gateway
   # differs from the recreate journal. destroy follows the owning registry.
   # --fresh does not clear that record. After destroy exits 0, onboard once.
+  printf 'checking the recorded gateway for %s\n' "$NEMOCLAW_SANDBOX_NAME"
+  # Command reference: start the gateway with status, then retry destroy.
+  # A transport error means presence is unknown, so destroy removes nothing.
+  host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
   printf 'destroying %s through its recorded gateway\n' "$NEMOCLAW_SANDBOX_NAME"
-  if ! host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" destroy --yes >"$log" 2>&1; then
+  if ! host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" destroy --yes >>"$log" 2>&1; then
     host_onboard_failure "$log"
   fi
   stop_actions_openshell_launchagent
