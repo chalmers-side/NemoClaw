@@ -157,11 +157,6 @@ destroy_sandbox_keep_gateway() {
   return 1
 }
 
-onboard_recreate_without_backup() {
-  export NEMOCLAW_RECREATE_SANDBOX=1
-  export NEMOCLAW_RECREATE_WITHOUT_BACKUP=1
-}
-
 start_sandbox_container_if_present() {
   local cid
   cid="$(docker ps -aq --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" 2>/dev/null || true)"
@@ -199,18 +194,22 @@ host_onboard_resume_only() {
       return 0
       ;;
     error)
-      printf 'sandbox %s is Error; repair then recheck\n' "$NEMOCLAW_SANDBOX_NAME"
-      repair_sandbox_boot
-      host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
-      state="$(classify_host_sandbox)"
-      if [[ "$state" == "ready" ]]; then
-        printf 'sandbox %s recovered to Ready; skip onboard\n' "$NEMOCLAW_SANDBOX_NAME"
-        rm -f "$log"
-        return 0
-      fi
-      printf 'sandbox %s is still Error; --resume without a native-home snapshot\n' "$NEMOCLAW_SANDBOX_NAME"
-      onboard_recreate_without_backup
-      extra=(--resume)
+      printf 'sandbox %s is Error; repair hosts and recover (do not replace the create transaction)\n' "$NEMOCLAW_SANDBOX_NAME"
+      local i
+      for i in $(seq 1 30); do
+        repair_sandbox_boot
+        host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
+        host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" gateway restart >/dev/null 2>&1 || true
+        state="$(classify_host_sandbox)"
+        if [[ "$state" == "ready" ]]; then
+          printf 'sandbox %s recovered to Ready; skip onboard\n' "$NEMOCLAW_SANDBOX_NAME"
+          rm -f "$log"
+          return 0
+        fi
+        sleep 3
+      done
+      host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
+      die "sandbox ${NEMOCLAW_SANDBOX_NAME} stayed Error after repair/recover. Do not onboard --resume/--recreate-sandbox; a pending create still owns the inference route. $(tail -c 800 "$log")"
       ;;
     absent)
       case "$session" in
@@ -250,19 +249,18 @@ host_onboard_resume_only() {
   kill "$repair_pid" 2>/dev/null || true
   wait "$repair_pid" 2>/dev/null || true
   if grep -q 'Agent setup failed' "$log"; then
-    printf 'Hermes agent setup failed; repair hosts and --resume without replacing the create transaction\n'
-    repair_sandbox_boot
-    host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
-    if [[ "$(classify_host_sandbox)" == "ready" ]]; then
-      rm -f "$log"
-      return 0
-    fi
-    onboard_recreate_without_backup
-    extra=(--resume)
-    if run_host_onboard "$log" "${extra[@]}"; then
-      rm -f "$log"
-      return 0
-    fi
+    printf 'Hermes agent setup failed; repair hosts and recover instead of replacing the sandbox\n'
+    local j
+    for j in $(seq 1 30); do
+      repair_sandbox_boot
+      host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
+      host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" gateway restart >/dev/null 2>&1 || true
+      if [[ "$(classify_host_sandbox)" == "ready" ]]; then
+        rm -f "$log"
+        return 0
+      fi
+      sleep 3
+    done
   fi
   host_onboard_failure "$log"
 }
