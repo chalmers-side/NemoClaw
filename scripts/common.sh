@@ -371,7 +371,7 @@ EOF
 
 openshell_is_connected() {
   command -v openshell >/dev/null 2>&1 || return 1
-  openshell status 2>/dev/null | grep -q 'Status: Connected'
+  openshell status 2>/dev/null | grep -qi 'status: connected'
 }
 
 # Recorded docker-driver mTLS gateway. Empty args; do not pass --disable-tls.
@@ -403,24 +403,44 @@ ensure_recorded_tls_gateway() {
   fi
   export OPENSHELL_SERVER_PORT="${OPENSHELL_SERVER_PORT:-8080}"
   export OPENSHELL_BIND_ADDRESS="${OPENSHELL_BIND_ADDRESS:-127.0.0.1}"
+  openshell gateway select nemoclaw >/dev/null 2>&1 || true
   if openshell_is_connected; then
     printf 'recorded OpenShell gateway is already Connected\n'
     return 0
   fi
-  local pid args
+  printf '8080 listeners:\n'
+  lsof -nP -iTCP:8080 -sTCP:LISTEN 2>/dev/null || true
+  local pid args occupied=0
   for pid in $(listener_pids 8080); do
     args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
     case "$args" in
+      *docker-proxy*|*com.docker*)
+        die "127.0.0.1:8080 is a Docker-published port. Stop that container. Do not kill Docker.app."
+        ;;
       *openshell-gateway*--disable-tls*)
         printf 'stopping plaintext openshell-gateway on 8080 so TLS can bind\n'
         kill -TERM "$pid" || true
         ;;
+      *openshell-gateway*)
+        occupied=1
+        ;;
     esac
   done
   sleep 2
+  openshell gateway select nemoclaw >/dev/null 2>&1 || true
   if openshell_is_connected; then
     printf 'recorded OpenShell gateway is Connected\n'
     return 0
+  fi
+  if [[ "$occupied" -eq 1 ]]; then
+    for i in $(seq 1 20); do
+      if openshell_is_connected; then
+        printf 'recorded OpenShell gateway is Connected\n'
+        return 0
+      fi
+      sleep 1
+    done
+    die "openshell-gateway already listens on 8080 but openshell status is not Connected. On the Mac mini run: openshell gateway select nemoclaw && openshell status"
   fi
   log="${HOME}/Library/Logs/nemoclaw-openshell-gateway-tls.log"
   mkdir -p "${HOME}/Library/Logs"
