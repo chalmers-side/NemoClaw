@@ -292,11 +292,8 @@ ensure_homebrew_openshell_gateway() {
   fi
   export PATH="$(dirname "$gw"):${PATH}"
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-    # nemohermes onboard starts its own Docker-driver gateway on 127.0.0.1:8080.
-    # A KeepAlive LaunchAgent takes the port back after onboard stops it.
-    launchctl bootout "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
-    launchctl disable "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
-    rm -f "${HOME}/Library/LaunchAgents/com.nemoclaw.openshell-gateway.plist"
+    # Leave the recorded gateway up so `destroy` can reach it.
+    # stop_actions_openshell_launchagent runs after destroy, before onboard.
     return 0
   fi
   local plist="${HOME}/Library/LaunchAgents/com.nemoclaw.openshell-gateway.plist"
@@ -344,6 +341,17 @@ EOF
     sleep 1
   done
   die "OpenShell gateway did not answer on 127.0.0.1:8080. $(tail -n 30 "${HOME}/Library/Logs/nemoclaw-openshell-gateway.log" 2>/dev/null || true)"
+}
+
+# nemohermes onboard starts its own Docker-driver gateway on 127.0.0.1:8080.
+# A KeepAlive LaunchAgent takes the port back after onboard stops it.
+stop_actions_openshell_launchagent() {
+  [[ -n "${GITHUB_ACTIONS:-}" ]] || return 0
+  local uid
+  uid="$(id -u)"
+  launchctl bootout "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
+  launchctl disable "gui/${uid}/com.nemoclaw.openshell-gateway" >/dev/null 2>&1 || true
+  rm -f "${HOME}/Library/LaunchAgents/com.nemoclaw.openshell-gateway.plist"
 }
 
 # Print the current Docker Desktop size. Does not change it.

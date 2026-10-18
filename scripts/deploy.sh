@@ -104,15 +104,20 @@ host_onboard_resume_only() {
       die "~/.config is not writable by ${USER}. On the Mac mini run: sudo chown ${USER}:staff ${HOME}/.config && chmod u+rwx ${HOME}/.config"
     fi
   fi
-  printf 'resuming onboarding for %s\n' "$NEMOCLAW_SANDBOX_NAME"
-  # The sandbox is not ready, so the workspace snapshot cannot SSH in.
-  # Resume the failed session and skip that snapshot. A new --fresh records
-  # a different gateway and NemoClaw then refuses to delete the sandbox.
-  if NEMOCLAW_RECREATE_WITHOUT_BACKUP=1 host_nemoclaw_cmd onboard \
+  # NVIDIA docs: onboard will not delete a sandbox when its registry gateway
+  # differs from the recreate journal. destroy follows the owning registry.
+  # --fresh does not clear that record. After destroy exits 0, onboard once.
+  printf 'destroying %s through its recorded gateway\n' "$NEMOCLAW_SANDBOX_NAME"
+  if ! host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" destroy --yes >"$log" 2>&1; then
+    host_onboard_failure "$log"
+  fi
+  stop_actions_openshell_launchagent
+  printf 'onboarding %s after destroy\n' "$NEMOCLAW_SANDBOX_NAME"
+  if host_nemoclaw_cmd onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
     --yes \
-    --resume \
+    --fresh \
     --no-ollama-autostart \
     --agent "$NEMOCLAW_AGENT" \
     --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
