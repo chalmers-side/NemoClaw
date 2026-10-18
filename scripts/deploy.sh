@@ -123,10 +123,7 @@ prepare_host_openshell_env() {
 }
 
 require_connected_gateway() {
-  local gw_state="${HOME}/.local/state/nemoclaw/openshell-docker-gateway"
-  if ! openshell status 2>/dev/null | grep -q 'Status: Connected'; then
-    die "OpenShell gateway is not Connected on 127.0.0.1:8080. On the Mac mini start openshell-gateway with OPENSHELL_LOCAL_TLS_DIR, OPENSHELL_GATEWAY_CONFIG, and OPENSHELL_DB_URL under ${gw_state}. Do not pass --disable-tls, and do not destroy the gateway. Then rerun sandbox onboard."
-  fi
+  ensure_recorded_tls_gateway
 }
 
 run_host_onboard() {

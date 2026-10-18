@@ -318,8 +318,8 @@ ensure_homebrew_openshell_gateway() {
   fi
   export PATH="$(dirname "$gw"):${PATH}"
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-    # Leave the recorded gateway up so `destroy` can reach it.
-    # stop_actions_openshell_launchagent runs after destroy, before onboard.
+    stop_actions_openshell_launchagent
+    ensure_recorded_tls_gateway "$gw"
     return 0
   fi
   local plist="${HOME}/Library/LaunchAgents/com.nemoclaw.openshell-gateway.plist"
@@ -367,6 +367,58 @@ EOF
     sleep 1
   done
   die "OpenShell gateway did not answer on 127.0.0.1:8080. $(tail -n 30 "${HOME}/Library/Logs/nemoclaw-openshell-gateway.log" 2>/dev/null || true)"
+}
+
+openshell_is_connected() {
+  command -v openshell >/dev/null 2>&1 || return 1
+  openshell status 2>/dev/null | grep -q 'Status: Connected'
+}
+
+# Recorded docker-driver mTLS gateway. Empty args; do not pass --disable-tls.
+ensure_recorded_tls_gateway() {
+  local gw="${1:-}" i log gw_state cfg
+  if [[ -z "$gw" ]]; then
+    if [[ -x /opt/homebrew/bin/openshell-gateway ]]; then
+      gw=/opt/homebrew/bin/openshell-gateway
+    else
+      gw="${HOME}/.nemoclaw/openshell/bin/openshell-gateway"
+    fi
+  fi
+  [[ -x "$gw" ]] || die "openshell-gateway is not executable"
+  export PATH="$(dirname "$gw"):${PATH}"
+  gw_state="${HOME}/.local/state/nemoclaw/openshell-docker-gateway"
+  if [[ ! -d "${gw_state}/tls" ]]; then
+    die "missing ${gw_state}/tls. On the Mac mini the recorded mTLS gateway must already exist. Start openshell-gateway once with OPENSHELL_LOCAL_TLS_DIR, OPENSHELL_GATEWAY_CONFIG, and OPENSHELL_DB_URL under that directory. Do not pass --disable-tls."
+  fi
+  export OPENSHELL_LOCAL_TLS_DIR="${gw_state}/tls"
+  cfg=""
+  if [[ -f "${gw_state}/openshell-gateway.toml" ]]; then
+    cfg="${gw_state}/openshell-gateway.toml"
+  elif [[ -f "${gw_state}/gateway.toml" ]]; then
+    cfg="${gw_state}/gateway.toml"
+  fi
+  [[ -n "$cfg" ]] && export OPENSHELL_GATEWAY_CONFIG="$cfg"
+  if [[ -f "${gw_state}/openshell.db" ]]; then
+    export OPENSHELL_DB_URL="sqlite:${gw_state}/openshell.db"
+  fi
+  export OPENSHELL_SERVER_PORT="${OPENSHELL_SERVER_PORT:-8080}"
+  export OPENSHELL_BIND_ADDRESS="${OPENSHELL_BIND_ADDRESS:-127.0.0.1}"
+  if openshell_is_connected; then
+    printf 'recorded OpenShell gateway is already Connected\n'
+    return 0
+  fi
+  log="${HOME}/Library/Logs/nemoclaw-openshell-gateway.log"
+  mkdir -p "${HOME}/Library/Logs"
+  printf 'starting recorded TLS openshell-gateway on 127.0.0.1:8080\n'
+  nohup "$gw" >>"$log" 2>&1 &
+  for i in $(seq 1 30); do
+    if openshell_is_connected; then
+      printf 'recorded OpenShell gateway is Connected\n'
+      return 0
+    fi
+    sleep 1
+  done
+  die "OpenShell gateway did not become Connected. $(tail -n 30 "$log" 2>/dev/null || true)"
 }
 
 # nemohermes onboard starts its own Docker-driver gateway on 127.0.0.1:8080.
