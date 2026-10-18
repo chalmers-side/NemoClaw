@@ -370,8 +370,10 @@ EOF
 }
 
 openshell_is_connected() {
+  local out
   command -v openshell >/dev/null 2>&1 || return 1
-  openshell status 2>/dev/null | grep -qi 'status: connected'
+  out="$(openshell status 2>&1 || true)"
+  printf '%s\n' "$out" | grep -qiE 'status:[[:space:]]*connected|authenticated \(mtls'
 }
 
 # Recorded docker-driver mTLS gateway. Empty args; do not pass --disable-tls.
@@ -404,6 +406,8 @@ ensure_recorded_tls_gateway() {
   export OPENSHELL_SERVER_PORT="${OPENSHELL_SERVER_PORT:-8080}"
   export OPENSHELL_BIND_ADDRESS="${OPENSHELL_BIND_ADDRESS:-127.0.0.1}"
   openshell gateway select nemoclaw >/dev/null 2>&1 || true
+  printf 'openshell status:\n'
+  openshell status 2>&1 || true
   if openshell_is_connected; then
     printf 'recorded OpenShell gateway is already Connected\n'
     return 0
