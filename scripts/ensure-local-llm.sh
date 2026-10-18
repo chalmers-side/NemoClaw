@@ -107,12 +107,12 @@ pull_model() {
   local model="${NEMOCLAW_MODEL:-}"
   [[ -n "$model" ]] || die "NEMOCLAW_MODEL is required for the shared local LLM"
   if ollama_on_host; then
-    printf 'pulling shared model %s on the host Ollama\n' "$model"
-    "$(brew --prefix)/bin/ollama" pull "$model"
+    printf 'pulling shared model %s on the host Ollama (timeout 600s)\n' "$model"
+    run_with_timeout 600 "$(brew --prefix)/bin/ollama" pull "$model"
     return 0
   fi
-  printf 'pulling shared model %s inside %s\n' "$model" "$OLLAMA_CONTAINER"
-  docker exec "$OLLAMA_CONTAINER" ollama pull "$model"
+  printf 'pulling shared model %s inside %s (timeout 600s)\n' "$model" "$OLLAMA_CONTAINER"
+  run_with_timeout 600 docker exec "$OLLAMA_CONTAINER" ollama pull "$model"
 }
 
 ensure_local_llm() {
@@ -122,10 +122,15 @@ ensure_local_llm() {
     stop_compose_ollama
     start_host_ollama
   fi
+  printf 'waiting for Ollama on 127.0.0.1:11434 (timeout 120s)\n'
   for i in $(seq 1 60); do
     if ollama_http_ok; then
+      printf 'Ollama is up after %ss\n' "$((i * 2))"
       pull_model
       return 0
+    fi
+    if [[ $((i % 10)) -eq 0 ]]; then
+      printf 'still waiting for Ollama (%ss / 120s)\n' "$((i * 2))"
     fi
     sleep 2
   done

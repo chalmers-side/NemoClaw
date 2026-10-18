@@ -1,5 +1,5 @@
 name: Run deploy stage
-description: Sync /opt/app/NemoClaw then run one deploy action from that tree
+description: Sync /opt/app/NemoClaw then run auto, ollama, nemoclaw, onboard, upgrade, or recover from that tree
 inputs:
   target:
     required: true

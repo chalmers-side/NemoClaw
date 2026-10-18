@@ -1,5 +1,8 @@
 name: Redeploy
 
+# Daily path: sync /opt/app, update host tools only when those files changed,
+# patch sandbox config, then health-check Ollama / Gateway / Sandbox.
+# Never onboard, --resume, or create a sandbox.
 on:
   push:
     branches:
@@ -31,7 +34,7 @@ jobs:
     # poc runs on the Mac mini runner. Other targets stay on nemoclaw,<user>.
     runs-on: ${{ fromJSON((inputs.target || 'poc') == 'poc' && '["self-hosted", "macOS", "ARM64", "chalmers-macmini-node-1"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target || 'poc')) }}
     environment: ${{ inputs.target || 'poc' }}
-    timeout-minutes: 120
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4

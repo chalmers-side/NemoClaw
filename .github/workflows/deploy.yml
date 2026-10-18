@@ -1,7 +1,9 @@
 name: Deploy NemoClaw
 
 # Same path as main's workflow so the Actions button exists.
-# auto = first full deploy or later rebuild from git diff. Other values force one stage.
+# auto = daily sync + host-file rebuild + health checks (never onboard).
+# sandbox = first install only; refuses if the sandbox already exists.
+# ollama / nemoclaw force one host stage.
 on:
   workflow_dispatch:
     inputs:

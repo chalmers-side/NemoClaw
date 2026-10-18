@@ -211,12 +211,23 @@ sandbox_ok() {
   cli "$NEMOCLAW_SANDBOX_NAME" status >/dev/null 2>&1
 }
 
+sandbox_present() {
+  local out
+  [[ -n "${NEMOCLAW_SANDBOX_NAME:-}" ]] || return 1
+  cli_installed || return 1
+  out="$(cli "$NEMOCLAW_SANDBOX_NAME" status 2>&1 || true)"
+  if printf '%s\n' "$out" | grep -F "Sandbox '${NEMOCLAW_SANDBOX_NAME}' does not exist" >/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
 run_onboard() {
-  log "onboarding sandbox ${NEMOCLAW_SANDBOX_NAME}"
-  if cli onboard --non-interactive --yes-i-accept-third-party-software --yes --resume; then
+  if sandbox_present; then
+    log "sandbox ${NEMOCLAW_SANDBOX_NAME} already exists; refusing create and --resume"
     return 0
   fi
-  log "resume failed; running onboard without --resume"
+  log "onboarding sandbox ${NEMOCLAW_SANDBOX_NAME} (first install; no --resume/--fresh)"
   cli onboard --non-interactive --yes-i-accept-third-party-software --yes
 }
 
@@ -252,7 +263,6 @@ case "$ACTION" in
     serve
     ;;
   upgrade)
-    run_onboard
     run_upgrade
     verify
     serve
@@ -262,8 +272,7 @@ case "$ACTION" in
     ;;
   serve)
     if ! sandbox_ok; then
-      run_onboard
-      verify
+      die "sandbox ${NEMOCLAW_SANDBOX_NAME} is not healthy; refusing onboard --resume. Recover on the host instead of recreating."
     fi
     serve
     ;;

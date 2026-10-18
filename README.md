@@ -50,16 +50,23 @@ GitHub Actions (選機器)
 2. 編輯 [`personal_config/poc/config.env`](personal_config/poc/config.env)：
    - `NEMOCLAW_AGENT`：`hermes`（預設）、`openclaw`、或 `langchain-deepagents-code`
    - `NEMOCLAW_MODEL`：共用本機模型。Hermes 需要 native context ≥ 64000。16GB 預設是 `qwen3:4b`。`qwen3.5:9b` 在 64k、`q4_0` KV 時約 7.2 GiB，會和 Docker VM 搶統一記憶體。`qwen3:8b` 要先確認 context ≥ 64000 並量過 RSS，才換成預設。真 3B（`qwen2.5:3b`）請把 agent 改成 `openclaw`
-3. 部署：
+3. 首次初始化與日常部署是分開的：
 
 ```bash
+# First install only (refuses if poc-claw already exists)
+bash ./scripts/deploy.sh poc ollama
+bash ./scripts/deploy.sh poc nemoclaw
+bash ./scripts/deploy.sh poc onboard
+
+# Daily: host-file updates + health checks. Never onboard or --resume.
 bash ./scripts/run-planned-deploy.sh poc
 bash ./scripts/status.sh poc
+
+# Sandbox Error / stopped: repair only. Never destroy or recreate.
+bash ./scripts/recover-sandbox.sh poc
 ```
 
-或手動指定 stage：`bash ./scripts/deploy.sh poc ollama` / `nemoclaw` / `onboard`。
-
-macOS 且 provider 是 Ollama 時，三個 stage 分開跑：`ollama` 只管本機 Ollama，`nemoclaw` 只管 gateway / `nemohermes` / `:11435` auth proxy，`onboard` / `upgrade` 只動 sandbox。第一次（沒有 `~/.nemoclaw/deploy-state/<target>/<stage>` 或服務還沒裝好）會依序跑完。之後只 rebuild diff 打到的 stage。resume 失敗就停，不會再建一個 sandbox。`upgrade` 只跑 `upgrade-sandboxes`，不刪 Hermes volume，也不重啟 Ollama。Linux 目標仍走 compose。
+macOS 且 provider 是 Ollama 時：`ollama` 管本機 Ollama，`nemoclaw` 管 gateway / `nemohermes` / `:11435` auth proxy，`onboard` 只在 sandbox 不存在時建立一次。日常 `auto` / `run-planned-deploy.sh` 不跑 onboard、`--resume`、`--fresh`、`upgrade-sandboxes`。Ollama 或 gateway 沒在聽時 health check 失敗，改跑 **Deploy Ollama** / **Deploy NemoClaw host**。Linux 目標仍走 compose，但 `upgrade` / `serve` 也不再 `onboard --resume`。
 
 服務分工：
 
@@ -181,22 +188,23 @@ Settings → Environments → 建立與使用者同名的 environment（`chalmer
 
 ## 用 GitHub Actions 指定機器部署
 
-1. 用 Actions → **Deploy NemoClaw**（`deploy.yml`）。Branch 選 `feature/chalmers-poc`，target 選 `poc`。stage 選 **`auto`**（第一次完整部署，之後看 diff）或 force `ollama` / `nemoclaw` / `sandbox`。不要選 `main`。job 先 clone 到 `/opt/app/NemoClaw`。
-2. push 到 `main` / `feature*` 跑 **Redeploy**，同樣是 `auto`：沒裝過就全跑，docs-only 的 commit 會 skip，不會重啟 Ollama 或 destroy sandbox。
-3. `poc` 只會被 `chalmers-macmini-node-1` 那台 runner 接走。
-4. 在 **Deployments** 看到對應 environment 的紀錄
+1. 首次建立 sandbox：Actions → **First deploy** 或 **Deploy NemoClaw** stage **`sandbox`**（`onboard`）。Sandbox 或它的 Docker 容器已存在時會拒絕，不會 `--resume`。
+2. 日常：Actions → **Redeploy**（push `main` / `feature*`）或 **Deploy NemoClaw** stage **`auto`**。只 sync `/opt/app`、必要時更新 host Ollama／gateway 腳本、修補 Hermes 設定，再分別檢查 Ollama、Gateway、Sandbox。不會 onboard、不會 `openshell sandbox create`。
+3. Sandbox 異常：Actions → **Recover sandbox**。只 `start` / `recover` / 修 hosts。不刪、不重建。
+4. Host 服務沒起來： **Deploy Ollama** / **Deploy NemoClaw host**。
+5. `poc` 只會被 `chalmers-macmini-node-1` 那台 runner 接走。Branch 選 `feature/chalmers-poc`。不要選 `main` 跑 First deploy。job 先 clone 到 `/opt/app/NemoClaw`。
 
-健康檢查：Actions → **Status NemoClaw** → 選同一台機器。只會報 healthy / unhealthy，**不會**把 dashboard URL 或 gateway token 印進 log。
+健康檢查：Actions → **Status NemoClaw**。分別報 Ollama / Gateway / Sandbox，**不會**把 dashboard URL 或 gateway token 印進 log。
 
-同一台機器的 deploy / status 不會並行（concurrency group `nemoclaw-<target>`）。
+同一台機器的 deploy / status / recover 不會並行（GitHub concurrency group `nemoclaw-<target>`，加上 `~/.nemoclaw/deploy-state/<target>/deploy.lock`）。
 
 ### 本機手動跑（除錯用）
 
 在目標機器、repo checkout 裡：
 
 ```bash
-bash ./scripts/deploy.sh poc onboard
 bash ./scripts/status.sh poc
+bash ./scripts/recover-sandbox.sh poc
 ```
 
 長時間 onboard 若走 SSH 而不是 Actions，請在 `tmux` 裡跑，避免斷線中斷安裝：
@@ -210,7 +218,7 @@ bash ./scripts/deploy.sh chalmers onboard
 ## 旋轉金鑰
 
 1. 在該機器改 `personal_config/<user>/secrets.env`
-2. 再跑一次 **First deploy** / `onboard`（對齊官方 credential rotation：新 key 經環境變數進 onboard，註冊到 OpenShell gateway）
+2. Sandbox 已存在時跑 **Recover sandbox** / `recover-sandbox.sh`，不要再 onboard。只有 sandbox 完全不存在才跑 **First deploy**。
 3. 不要把舊 key 留在 shell history；部署腳本結束會 unset 已載入的變數
 
 ## 重開機後恢復
@@ -223,20 +231,15 @@ docker info
 bash ./scripts/status.sh <user>
 ```
 
-若 stack 沒在跑：
+若 Ollama 或 gateway 沒在跑，分別跑 `deploy.sh <user> ollama` / `nemoclaw`，不要 onboard。
+
+若 sandbox 存在但不健康：
 
 ```bash
-bash ./scripts/deploy.sh <user> onboard
+bash ./scripts/recover-sandbox.sh <user>
 ```
 
-若 status 說 sandbox 存在但停了：
-
-```bash
-docker compose -p nemoclaw-<user> -f compose/docker-compose.yml --project-directory compose exec nemoclaw \
-  nemoclaw <sandbox-name> start
-```
-
-仍不健康時依 CLI 提示 `recover`。sandbox 容器不見了只能重建：`onboard`（舊 workspace 需另有備份才能還原）。
+不要刪 sandbox、volume 或 credentials。OpenShell phase 停在 Error 時，依 `MEMORY.md` 的手動步驟，不要自動重建。
 
 ## Dashboard（不要對外開 port）
 
@@ -257,8 +260,8 @@ NemoClaw 可能改用 `18789`–`18799` 的下一個空 port；以 `dashboard-ur
 
 ## 故障
 
-- Onboard 依 sandbox 狀態選 `--resume` / `--fresh` / `destroy --no-cleanup-gateway`。Ready 不重裝。不要手動亂加 `--fresh`。
-- `status` 失敗：先看 compose 是否在跑，再看 `nemoclaw <sandbox-name> status` 的 failure layer。
+- 日常部署禁止 `onboard --resume`、`--fresh`、`--recreate-sandbox`。`nemohermes onboard` 會印 `Creating sandbox` 並呼叫 `openshell sandbox create`；sandbox 已存在時腳本會直接拒絕。
+- `status` 失敗：先看是 Ollama、Gateway 還是 Sandbox 那一層。Sandbox Error 跑 Recover，不要 First deploy。
 - 不要把 dashboard URL、gateway token、API key 貼進 issue、PR 或 Actions 註解。
 
 官方 pin 在 [`NEMOCLAW_VERSION`](NEMOCLAW_VERSION) 與 [`OPENSHELL_VERSION`](OPENSHELL_VERSION)。更新時改這兩個檔案，不要用 `latest` / `lkg` 當長期伺服器來源。

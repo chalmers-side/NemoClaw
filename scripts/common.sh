@@ -85,6 +85,232 @@ write_stage_marker() {
   printf '%s\n' "$sha" >"${dir}/${stage}"
 }
 
+deploy_lock_file() {
+  printf '%s\n' "$(deploy_state_dir)/deploy.lock"
+}
+
+DEPLOY_LOCK_PYTHON_PID=""
+NEMOCLAW_DEPLOY_LOCK_HELD="${NEMOCLAW_DEPLOY_LOCK_HELD:-}"
+
+release_deploy_lock() {
+  if [[ -n "${DEPLOY_LOCK_PYTHON_PID:-}" ]]; then
+    kill "$DEPLOY_LOCK_PYTHON_PID" 2>/dev/null || true
+    wait "$DEPLOY_LOCK_PYTHON_PID" 2>/dev/null || true
+    DEPLOY_LOCK_PYTHON_PID=""
+  fi
+  NEMOCLAW_DEPLOY_LOCK_HELD=""
+}
+
+# Hold an exclusive lock for TARGET until this shell exits.
+# Wait up to 900s. A dead holder is released by fcntl when that process exits.
+acquire_deploy_lock() {
+  local lockfile statusfile status wait_s i
+  [[ -z "${NEMOCLAW_DEPLOY_LOCK_HELD:-}" ]] || return 0
+  [[ -n "${TARGET:-}" ]] || die "acquire_deploy_lock requires TARGET"
+  wait_s="${NEMOCLAW_DEPLOY_LOCK_WAIT:-900}"
+  lockfile="$(deploy_lock_file)"
+  mkdir -p "$(deploy_state_dir)"
+  chmod 700 "${HOME}/.nemoclaw" "$(dirname "$(deploy_state_dir)")" "$(deploy_state_dir)" 2>/dev/null || true
+  statusfile="$(mktemp "${TMPDIR:-/tmp}/nemoclaw-lockstatus.XXXXXX")"
+  python3 -c '
+import errno, fcntl, os, sys, time
+path, timeout, statusfile, pid = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+deadline = time.time() + timeout
+locked = False
+try:
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locked = True
+            break
+        except OSError as exc:
+            if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+            if time.time() >= deadline:
+                with open(statusfile, "w") as out:
+                    out.write("TIMEOUT\n")
+                sys.exit(1)
+            time.sleep(1)
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.ftruncate(fd, 0)
+    os.write(fd, (pid + "\n").encode())
+    os.fsync(fd)
+    with open(statusfile, "w") as out:
+        out.write("LOCKED\n")
+    while True:
+        time.sleep(3600)
+finally:
+    if locked:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    os.close(fd)
+' "$lockfile" "$wait_s" "$statusfile" "$$" >/dev/null 2>&1 &
+  DEPLOY_LOCK_PYTHON_PID=$!
+  status=""
+  i=0
+  while [[ "$i" -le "$wait_s" ]]; do
+    if [[ -s "$statusfile" ]]; then
+      status="$(tr -d '[:space:]' <"$statusfile")"
+      break
+    fi
+    if ! kill -0 "$DEPLOY_LOCK_PYTHON_PID" 2>/dev/null; then
+      wait "$DEPLOY_LOCK_PYTHON_PID" 2>/dev/null || true
+      status="$(tr -d '[:space:]' <"$statusfile" 2>/dev/null || true)"
+      break
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  rm -f "$statusfile"
+  if [[ "$status" != "LOCKED" ]]; then
+    kill "$DEPLOY_LOCK_PYTHON_PID" 2>/dev/null || true
+    wait "$DEPLOY_LOCK_PYTHON_PID" 2>/dev/null || true
+    DEPLOY_LOCK_PYTHON_PID=""
+    die "another deploy holds ${lockfile}. Wait for it to finish, or run status after it exits."
+  fi
+  NEMOCLAW_DEPLOY_LOCK_HELD=1
+  export NEMOCLAW_DEPLOY_LOCK_HELD
+  printf 'deploy lock acquired for %s (%s)\n' "$TARGET" "$lockfile"
+}
+
+run_with_timeout() {
+  local seconds="${1:-}"
+  shift
+  [[ -n "$seconds" && -n "${1:-}" ]] || die "usage: run_with_timeout <seconds> <command> [args...]"
+  python3 - "$seconds" "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+seconds = int(sys.argv[1])
+cmd = sys.argv[2:]
+label = " ".join(cmd)
+try:
+    proc = subprocess.Popen(cmd, preexec_fn=os.setsid)
+except OSError as exc:
+    sys.stderr.write("error: could not start %s: %s\n" % (label, exc))
+    sys.exit(127)
+try:
+    rc = proc.wait(timeout=seconds)
+except subprocess.TimeoutExpired:
+    sys.stderr.write("error: timed out after %ss: %s\n" % (seconds, label))
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.wait()
+    sys.exit(124)
+sys.exit(rc if rc is not None else 1)
+PY
+}
+
+sandbox_container_id() {
+  local cid
+  cid="$(docker ps -aq --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" 2>/dev/null || true)"
+  cid="${cid%%$'\n'*}"
+  printf '%s\n' "$cid"
+}
+
+sandbox_container_running() {
+  docker ps --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" --format '{{.ID}}' 2>/dev/null | grep -q .
+}
+
+# True when Docker or nemohermes already knows this sandbox. Do not create another.
+sandbox_exists() {
+  local cid state
+  cid="$(sandbox_container_id)"
+  [[ -n "$cid" ]] && return 0
+  state="$(classify_host_sandbox)"
+  [[ "$state" != "absent" ]]
+}
+
+ollama_http_ok() {
+  curl -fsS --max-time 2 http://127.0.0.1:11434/api/version >/dev/null 2>&1
+}
+
+health_ollama() {
+  printf 'health ollama: checking 127.0.0.1:11434\n'
+  if ollama_http_ok; then
+    printf 'health ollama: ok\n'
+    return 0
+  fi
+  die "health ollama: 127.0.0.1:11434 did not answer. Run: bash ./scripts/deploy.sh ${TARGET} ollama"
+}
+
+gateway_http_ok() {
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 http://127.0.0.1:8080/ || true)"
+  case "$code" in
+    2* | 3* | 4*) return 0 ;;
+  esac
+  return 1
+}
+
+health_gateway() {
+  printf 'health gateway: checking OpenShell on 127.0.0.1:8080\n'
+  if ! gateway_http_ok; then
+    die "health gateway: 127.0.0.1:8080 did not answer (2xx-4xx). Run: bash ./scripts/deploy.sh ${TARGET} nemoclaw"
+  fi
+  if ! openshell_is_connected; then
+    die "health gateway: openshell status is not Connected. Run: bash ./scripts/deploy.sh ${TARGET} nemoclaw"
+  fi
+  printf 'health gateway: ok (Connected)\n'
+}
+
+health_sandbox() {
+  local state cid
+  printf 'health sandbox: checking %s\n' "$NEMOCLAW_SANDBOX_NAME"
+  cid="$(sandbox_container_id)"
+  state="$(classify_host_sandbox)"
+  printf 'health sandbox: state=%s container=%s\n' "$state" "${cid:-none}"
+  case "$state" in
+    ready)
+      if ! sandbox_container_running; then
+        die "health sandbox: ${NEMOCLAW_SANDBOX_NAME} is Ready in CLI but the container is not running. Run: bash ./scripts/recover-sandbox.sh ${TARGET}"
+      fi
+      printf 'health sandbox: ok (Ready)\n'
+      ;;
+    error)
+      die "health sandbox: ${NEMOCLAW_SANDBOX_NAME} is Error. Do not onboard or recreate. Run: bash ./scripts/recover-sandbox.sh ${TARGET}"
+      ;;
+    absent)
+      die "health sandbox: ${NEMOCLAW_SANDBOX_NAME} is not installed. Run First deploy: bash ./scripts/deploy.sh ${TARGET} onboard"
+      ;;
+    *)
+      if [[ -n "$cid" ]]; then
+        die "health sandbox: ${NEMOCLAW_SANDBOX_NAME} exists (container ${cid}) but state=${state}. Do not onboard. Run: bash ./scripts/recover-sandbox.sh ${TARGET}"
+      fi
+      die "health sandbox: ${NEMOCLAW_SANDBOX_NAME} state=${state}. Inspect it; do not onboard --resume. Run: bash ./scripts/recover-sandbox.sh ${TARGET}"
+      ;;
+  esac
+}
+
+sync_sandbox_config() {
+  printf 'syncing sandbox config for %s (no create)\n' "$NEMOCLAW_SANDBOX_NAME"
+  if ! sandbox_container_running; then
+    printf 'sandbox container is not running; skip config sync\n'
+    return 0
+  fi
+  repair_sandbox_openshell_hosts
+  ensure_hermes_inference_placeholder || true
+  ensure_hermes_discord_platform || true
+}
+
+run_health_checks() {
+  health_ollama
+  health_gateway
+  health_sandbox
+}
+
 load_config() {
   set -a
   # shellcheck disable=SC1090
@@ -370,7 +596,7 @@ EOF
 }
 
 openshell_status_text() {
-  openshell status 2>&1 | sed $'s/\x1b\\[[0-9;]*[[:alpha:]]//g' || true
+  run_with_timeout 15 openshell status 2>&1 | sed $'s/\x1b\\[[0-9;]*[[:alpha:]]//g' || true
 }
 
 openshell_is_connected() {
@@ -1083,18 +1309,36 @@ else:
 
 # absent | error | ready | unknown
 classify_host_sandbox() {
-  local cli log
+  local cli log rc=0 cid
   export PATH="/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
+  cid="$(sandbox_container_id)"
   cli="$(cli_name)"
   if ! command -v "$cli" >/dev/null 2>&1; then
-    printf 'absent\n'
+    if [[ -n "$cid" ]]; then
+      printf 'unknown\n'
+    else
+      printf 'absent\n'
+    fi
     return 0
   fi
   log="$(mktemp)"
-  "$cli" "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
+  set +e
+  run_with_timeout 45 "$cli" "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1
+  rc=$?
+  set -e
+  if [[ "$rc" -eq 124 ]]; then
+    printf 'classify sandbox: status timed out after 45s\n' >&2
+    rm -f "$log"
+    printf 'unknown\n'
+    return 0
+  fi
   if grep -F "Sandbox '${NEMOCLAW_SANDBOX_NAME}' does not exist" "$log" >/dev/null; then
     rm -f "$log"
-    printf 'absent\n'
+    if [[ -n "$cid" ]]; then
+      printf 'unknown\n'
+    else
+      printf 'absent\n'
+    fi
     return 0
   fi
   if grep -Ei 'phase[: ]+error|status[: ]+error|sandbox phase: error' "$log" >/dev/null; then
@@ -1112,18 +1356,22 @@ classify_host_sandbox() {
 }
 
 verify_sandbox() {
+  local cli
   printf 'verifying sandbox %s\n' "$NEMOCLAW_SANDBOX_NAME"
   repair_sandbox_openshell_hosts
   ensure_openshell_openai_inference
   ensure_hermes_inference_placeholder
   ensure_hermes_discord_platform
   probe_sandbox_inference
+  export PATH="/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
+  cli="$(cli_name)"
   if run_compose exec -T nemoclaw true >/dev/null 2>&1; then
     nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status
     nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" connect --probe-only
   else
-    host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status
-    host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" connect --probe-only
+    command -v "$cli" >/dev/null || die "${cli} is not on PATH; install NemoClaw on this machine first"
+    run_with_timeout 45 "$cli" "$NEMOCLAW_SANDBOX_NAME" status
+    run_with_timeout 90 "$cli" "$NEMOCLAW_SANDBOX_NAME" connect --probe-only
   fi
   printf 'sandbox %s is healthy\n' "$NEMOCLAW_SANDBOX_NAME"
 }

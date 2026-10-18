@@ -1,0 +1,37 @@
+name: Recover sandbox
+
+# Repair an existing sandbox. Never onboard, create, or destroy.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Machine (personal_config directory name)
+        required: true
+        type: choice
+        options:
+          - poc
+          - chalmers
+          - cliff
+
+concurrency:
+  group: nemoclaw-${{ inputs.target }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    name: Recover ${{ inputs.target }}
+    runs-on: ${{ fromJSON(inputs.target == 'poc' && '["self-hosted", "macOS", "ARM64", "chalmers-macmini-node-1"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target)) }}
+    environment: ${{ inputs.target }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run recover
+        uses: ./.github/actions/run-stage
+        with:
+          target: ${{ inputs.target }}
+          action: recover

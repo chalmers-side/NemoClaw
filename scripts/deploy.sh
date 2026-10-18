@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Deploy one personal_config target, one stage at a time.
-# Usage: ./scripts/deploy.sh <target> <ollama|nemoclaw|onboard|upgrade>
+# Usage: ./scripts/deploy.sh <target> <ollama|nemoclaw|onboard|upgrade|recover>
 #   ollama    host Ollama LaunchAgent + model pull
 #   nemoclaw  OpenShell gateway, nemohermes CLI, auth proxy
-#   onboard   first sandbox install
-#   upgrade   later sandbox redeploy; does not destroy sandbox or gateway
+#   onboard   first sandbox install only; refuses if the sandbox already exists
+#   upgrade   later sandbox check; does not destroy sandbox or gateway
+#   recover   repair an existing sandbox; never create, destroy, or onboard
 #
 # Secrets are read from personal_config/<target>/secrets.env (gitignored).
 # Do not enable xtrace; keys must not enter logs.
@@ -16,14 +17,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/common.sh
 source "${SCRIPT_DIR}/common.sh"
 
-trap unset_secrets EXIT
+trap 'release_deploy_lock; unset_secrets' EXIT
 
 TARGET="${1:-}"
 ACTION="${2:-}"
-[[ -n "$ACTION" ]] || die "usage: $0 <target> <ollama|nemoclaw|onboard|upgrade>"
+[[ -n "$ACTION" ]] || die "usage: $0 <target> <ollama|nemoclaw|onboard|upgrade|recover>"
 
 load_target "$TARGET"
 assert_not_actions_worktree
+acquire_deploy_lock
 load_secrets
 validate_secrets
 preflight_host
@@ -32,8 +34,8 @@ case "$ACTION" in
   sandbox) ACTION=onboard ;;
 esac
 case "$ACTION" in
-  ollama | nemoclaw | onboard | upgrade) ;;
-  *) die "unknown action '${ACTION}' (expected ollama, nemoclaw, onboard, or upgrade)" ;;
+  ollama | nemoclaw | onboard | upgrade | recover) ;;
+  *) die "unknown action '${ACTION}' (expected ollama, nemoclaw, onboard, upgrade, or recover)" ;;
 esac
 
 # shellcheck source=scripts/ensure-local-llm.sh
@@ -127,19 +129,27 @@ require_connected_gateway() {
 }
 
 run_host_onboard() {
-  local log="$1"
+  local log="$1" cli rc=0
   shift
-  if host_nemoclaw_cmd onboard \
+  if [[ "$*" == *"--resume"* || "$*" == *"--fresh"* || "$*" == *"--recreate-sandbox"* ]]; then
+    die "refusing onboard flags that can recreate a sandbox: $*"
+  fi
+  cli="$(cli_name)"
+  command -v "$cli" >/dev/null || die "${cli} is not on PATH; install NemoClaw on this machine first"
+  printf 'running %s onboard for %s (timeout 2400s, streaming log, no --resume/--fresh/--recreate-sandbox)\n' \
+    "$cli" "$NEMOCLAW_SANDBOX_NAME"
+  set +e
+  run_with_timeout 2400 "$cli" onboard \
     --non-interactive \
     --yes-i-accept-third-party-software \
     --yes \
-    "$@" \
     --no-ollama-autostart \
     --agent "$NEMOCLAW_AGENT" \
-    --name "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1; then
-    return 0
-  fi
-  return 1
+    --name "$NEMOCLAW_SANDBOX_NAME" 2>&1 | tee "$log"
+  rc="${PIPESTATUS[0]}"
+  set -e
+  [[ "$rc" -eq 0 ]] || return "$rc"
+  return 0
 }
 
 destroy_sandbox_keep_gateway() {
@@ -180,67 +190,26 @@ repair_sandbox_while_onboard() {
 }
 
 host_onboard_resume_only() {
-  local log state session extra=() repair_pid=""
+  local log state session cid repair_pid=""
   log="$(mktemp)"
   prepare_host_openshell_env
   require_connected_gateway
   state="$(classify_host_sandbox)"
   session="$(classify_onboard_session)"
-  printf 'sandbox state=%s session=%s\n' "$state" "$session"
-  case "$state" in
-    ready)
-      printf 'sandbox %s is ready; skip onboard\n' "$NEMOCLAW_SANDBOX_NAME"
-      rm -f "$log"
-      return 0
-      ;;
-    error)
-      printf 'sandbox %s is Error; repair hosts and recover (do not replace the create transaction)\n' "$NEMOCLAW_SANDBOX_NAME"
-      local i
-      for i in $(seq 1 30); do
-        repair_sandbox_boot
-        host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" start >/dev/null 2>&1 || true
-        host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
-        state="$(classify_host_sandbox)"
-        if [[ "$state" == "ready" ]]; then
-          printf 'sandbox %s recovered to Ready; skip onboard\n' "$NEMOCLAW_SANDBOX_NAME"
-          rm -f "$log"
-          return 0
-        fi
-        sleep 3
-      done
-      host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
-      die "sandbox ${NEMOCLAW_SANDBOX_NAME} stayed Error after repair/recover. Do not onboard --resume/--recreate-sandbox; a pending create still owns the inference route. $(tail -c 800 "$log")"
-      ;;
-    absent)
-      case "$session" in
-        resumable)
-          printf 'interrupted onboard; --resume\n'
-          extra=(--resume)
-          ;;
-        stale)
-          printf 'stale onboard session and no sandbox; --fresh\n'
-          extra=(--fresh)
-          ;;
-        *)
-          printf 'no sandbox; onboard on the Connected gateway\n'
-          extra=()
-          ;;
-      esac
-      ;;
-    unknown)
-      if [[ "$session" == "resumable" ]]; then
-        printf 'sandbox state unknown; --resume interrupted onboard\n'
-        extra=(--resume)
-      else
-        die "sandbox ${NEMOCLAW_SANDBOX_NAME} status is not Ready/Error/absent. Inspect it before onboard, destroy, or --fresh."
-      fi
-      ;;
-  esac
-  printf 'onboard flags:%s\n' "${extra[*]:+ ${extra[*]}}"
+  cid="$(sandbox_container_id)"
+  printf 'sandbox state=%s session=%s container=%s\n' "$state" "$session" "${cid:-none}"
+  if sandbox_exists; then
+    rm -f "$log"
+    die "sandbox ${NEMOCLAW_SANDBOX_NAME} already exists (state=${state}, container=${cid:-none}). Refusing onboard --resume/--fresh/--recreate-sandbox. Reuse it. If it is unhealthy: bash ./scripts/recover-sandbox.sh ${TARGET}"
+  fi
+  if [[ "$session" == "resumable" ]]; then
+    printf 'leftover onboard session ignored; first install will not pass --resume\n'
+  fi
+  printf 'no sandbox; first onboard on the Connected gateway (no --resume/--fresh)\n'
   release_untagged_openshell_gateway
   repair_sandbox_while_onboard &
   repair_pid=$!
-  if run_host_onboard "$log" "${extra[@]}"; then
+  if run_host_onboard "$log"; then
     kill "$repair_pid" 2>/dev/null || true
     wait "$repair_pid" 2>/dev/null || true
     rm -f "$log"
@@ -253,8 +222,7 @@ host_onboard_resume_only() {
     local j
     for j in $(seq 1 30); do
       repair_sandbox_boot
-      host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" start >/dev/null 2>&1 || true
-      host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
+      host_sandbox_cli_start_or_recover
       if [[ "$(classify_host_sandbox)" == "ready" ]]; then
         rm -f "$log"
         return 0
@@ -265,19 +233,56 @@ host_onboard_resume_only() {
   host_onboard_failure "$log"
 }
 
+host_sandbox_cli_start_or_recover() {
+  local cli
+  cli="$(cli_name)"
+  command -v "$cli" >/dev/null || return 0
+  run_with_timeout 60 "$cli" "$NEMOCLAW_SANDBOX_NAME" start >/dev/null 2>&1 || true
+  run_with_timeout 120 "$cli" "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
+}
+
+host_recover_sandbox() {
+  local cli state cid
+  prepare_host_openshell_env
+  require_connected_gateway
+  cid="$(sandbox_container_id)"
+  state="$(classify_host_sandbox)"
+  printf 'recover %s state=%s container=%s (no destroy, no onboard, no create)\n' \
+    "$NEMOCLAW_SANDBOX_NAME" "$state" "${cid:-none}"
+  if ! sandbox_exists; then
+    die "sandbox ${NEMOCLAW_SANDBOX_NAME} is not installed. Run First deploy: bash ./scripts/deploy.sh ${TARGET} onboard"
+  fi
+  start_sandbox_container_if_present || true
+  repair_sandbox_boot
+  cli="$(cli_name)"
+  command -v "$cli" >/dev/null || die "${cli} is not on PATH; install NemoClaw on this machine first"
+  run_with_timeout 60 "$cli" "$NEMOCLAW_SANDBOX_NAME" start || true
+  run_with_timeout 120 "$cli" "$NEMOCLAW_SANDBOX_NAME" recover || true
+  repair_sandbox_openshell_hosts || true
+  ensure_hermes_inference_placeholder || true
+  ensure_hermes_discord_platform || true
+  state="$(classify_host_sandbox)"
+  if [[ "$state" != "ready" ]]; then
+    die "sandbox ${NEMOCLAW_SANDBOX_NAME} stayed ${state} after recover. Do not destroy, onboard, or recreate. If OpenShell phase is Error, follow MEMORY.md (docker stop the sandbox, launchctl bootout sh.brew.openshell, fix the status byte, bootstrap gateway, openshell sandbox start). Then rerun: bash ./scripts/recover-sandbox.sh ${TARGET}"
+  fi
+  sync_sandbox_config
+  run_health_checks
+}
+
 host_upgrade_sandboxes() {
-  local log
+  local log cli
   log="$(mktemp)"
+  cli="$(cli_name)"
   printf 'checking whether %s exists before upgrade\n' "$NEMOCLAW_SANDBOX_NAME"
-  host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
+  run_with_timeout 45 "$cli" "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1 || true
   if grep -F "Sandbox '${NEMOCLAW_SANDBOX_NAME}' does not exist" "$log" >/dev/null; then
     printf 'sandbox %s is not installed; skip upgrade. Run stage sandbox (onboard) once.\n' "$NEMOCLAW_SANDBOX_NAME"
     rm -f "$log"
     return 1
   fi
   rm -f "$log"
-  printf 'upgrading sandboxes; Hermes state volume is left in place\n'
-  host_nemoclaw_cmd upgrade-sandboxes --check || true
+  printf 'checking sandbox upgrades (read-only --check); Hermes state volume is left in place\n'
+  run_with_timeout 120 "$cli" upgrade-sandboxes --check || true
 }
 
 wait_for_controller() {
@@ -344,6 +349,10 @@ deploy_host_sandbox() {
         write_stage_marker sandbox
       fi
       ;;
+    recover)
+      printf 'stage sandbox recover for %s\n' "$TARGET"
+      host_recover_sandbox
+      ;;
   esac
   printf 'sandbox stage finished for %s\n' "$TARGET"
 }
@@ -352,7 +361,7 @@ if ollama_on_host; then
   case "$ACTION" in
     ollama) deploy_host_ollama ;;
     nemoclaw) deploy_host_nemoclaw ;;
-    onboard | upgrade) deploy_host_sandbox ;;
+    onboard | upgrade | recover) deploy_host_sandbox ;;
   esac
 else
   case "$ACTION" in
@@ -376,6 +385,15 @@ else
       wait_for_controller
       write_stage_marker sandbox
       printf 'compose sandbox stage finished for %s\n' "$TARGET"
+      ;;
+    recover)
+      printf 'stage sandbox recover (compose) for %s\n' "$TARGET"
+      if ! sandbox_exists; then
+        die "sandbox ${NEMOCLAW_SANDBOX_NAME} is not installed. Run First deploy: bash ./scripts/deploy.sh ${TARGET} onboard"
+      fi
+      start_sandbox_container_if_present || true
+      verify_sandbox
+      printf 'compose sandbox recover finished for %s\n' "$TARGET"
       ;;
   esac
 fi

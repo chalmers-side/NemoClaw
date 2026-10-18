@@ -1,5 +1,6 @@
 name: Status NemoClaw
 
+# Read-only health: Ollama, OpenShell gateway, and sandbox separately.
 on:
   workflow_dispatch:
     inputs:

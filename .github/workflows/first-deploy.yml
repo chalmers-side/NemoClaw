@@ -1,5 +1,6 @@
 name: First deploy
 
+# First sandbox install only. Refuses if the sandbox or its container already exists.
 on:
   workflow_dispatch:
     inputs:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Report whether the target sandbox is healthy.
+# Report Ollama, OpenShell gateway, and sandbox health separately.
 # Does not print dashboard URLs or gateway tokens.
 # Usage: ./scripts/status.sh <target>
 
@@ -14,9 +14,11 @@ TARGET="${1:-}"
 load_target "$TARGET"
 assert_not_actions_worktree
 preflight_host
+acquire_deploy_lock
+trap 'release_deploy_lock' EXIT
 
-if ! docker ps --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" --format '{{.ID}}' | grep -q .; then
-  die "sandbox is not running. Deploy first: bash ./scripts/deploy.sh ${TARGET} onboard"
-fi
-
-verify_sandbox
+printf 'status %s\n' "$TARGET"
+health_ollama
+health_gateway
+health_sandbox
+printf 'status %s: healthy\n' "$TARGET"

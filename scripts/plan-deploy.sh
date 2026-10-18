@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Print the deploy actions that need to run for one target.
+# Print the daily host stages that need to run for one target.
+# Never prints onboard, upgrade, or recover.
 # Usage: ./scripts/plan-deploy.sh <target>
 # Stdout is a space-separated list (possibly empty). Reasons go to stderr.
 # Do not print secrets.
@@ -17,8 +18,6 @@ assert_not_actions_worktree
 
 NEED_OLLAMA=0
 NEED_NEMOCLAW=0
-NEED_SANDBOX=0
-SANDBOX_ACTION=upgrade
 
 read_marker() {
   local stage="$1" f
@@ -29,15 +28,6 @@ read_marker() {
 
 commit_in_repo() {
   git -C "$ROOT" cat-file -e "${1}^{commit}" 2>/dev/null
-}
-
-ollama_is_up() {
-  curl -fsS --max-time 2 http://127.0.0.1:11434/api/version >/dev/null 2>&1
-}
-
-nemohermes_is_up() {
-  export PATH="/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
-  command -v nemohermes >/dev/null 2>&1 && nemohermes --version >/dev/null 2>&1
 }
 
 config_value_from_text() {
@@ -72,21 +62,6 @@ plan_from_diff() {
       nemoclaw:scripts/macos-openshell-bridge.sh | nemoclaw:scripts/ollama-auth-proxy-agent.sh)
         NEED_NEMOCLAW=1
         ;;
-      sandbox:NEMOCLAW_VERSION | sandbox:compose/nemoclaw/entrypoint.sh)
-        NEED_SANDBOX=1
-        ;;
-      sandbox:personal_config/"${TARGET}"/config.env)
-        if [[ "$(config_value_from_text NEMOCLAW_AGENT "$old_cfg")" != "$(config_value_from_text NEMOCLAW_AGENT "$new_cfg")" ]] \
-          || [[ "$(config_value_from_text NEMOCLAW_SANDBOX_NAME "$old_cfg")" != "$(config_value_from_text NEMOCLAW_SANDBOX_NAME "$new_cfg")" ]] \
-          || [[ "$(config_value_from_text NEMOCLAW_POLICY_TIER "$old_cfg")" != "$(config_value_from_text NEMOCLAW_POLICY_TIER "$new_cfg")" ]] \
-          || [[ "$(config_value_from_text NEMOCLAW_WEB_SEARCH_PROVIDER "$old_cfg")" != "$(config_value_from_text NEMOCLAW_WEB_SEARCH_PROVIDER "$new_cfg")" ]] \
-          || [[ "$(config_value_from_text NEMOCLAW_IGNORE_RUNTIME_RESOURCES "$old_cfg")" != "$(config_value_from_text NEMOCLAW_IGNORE_RUNTIME_RESOURCES "$new_cfg")" ]] \
-          || [[ "$(config_value_from_text DISCORD_SERVER_ID "$old_cfg")" != "$(config_value_from_text DISCORD_SERVER_ID "$new_cfg")" ]] \
-          || [[ "$(config_value_from_text DISCORD_REQUIRE_MENTION "$old_cfg")" != "$(config_value_from_text DISCORD_REQUIRE_MENTION "$new_cfg")" ]] \
-          || [[ "$(config_value_from_text DISCORD_USER_ID "$old_cfg")" != "$(config_value_from_text DISCORD_USER_ID "$new_cfg")" ]]; then
-          NEED_SANDBOX=1
-        fi
-        ;;
     esac
     if [[ "$stage" == "nemoclaw" && "$OS" == "linux" ]]; then
       case "$f" in
@@ -101,58 +76,31 @@ EOF
 }
 
 CURRENT="$(current_deploy_sha)"
-printf 'planning deploy for %s at %s\n' "$TARGET" "$CURRENT" >&2
+printf 'planning daily deploy for %s at %s (never onboard or upgrade-sandboxes)\n' "$TARGET" "$CURRENT" >&2
 
-if ! read_marker ollama >/dev/null || ! ollama_is_up; then
-  NEED_OLLAMA=1
-  printf 'ollama: first install or not listening on 11434\n' >&2
-else
-  old="$(read_marker ollama)"
+if old="$(read_marker ollama)"; then
   if ! commit_in_repo "$old"; then
     NEED_OLLAMA=1
-    printf 'ollama: previous SHA %s is not in this clone; rebuild\n' "$old" >&2
+    printf 'ollama: previous SHA %s is not in this clone; rebuild host tools\n' "$old" >&2
   else
     plan_from_diff ollama "$old"
   fi
+else
+  printf 'ollama: no marker; skip host stage (health check will fail if 11434 is down)\n' >&2
 fi
 
-if ! read_marker nemoclaw >/dev/null || ! nemohermes_is_up; then
-  NEED_NEMOCLAW=1
-  printf 'nemoclaw: first install or nemohermes missing\n' >&2
-else
-  old="$(read_marker nemoclaw)"
+if old="$(read_marker nemoclaw)"; then
   if ! commit_in_repo "$old"; then
     NEED_NEMOCLAW=1
-    printf 'nemoclaw: previous SHA %s is not in this clone; rebuild\n' "$old" >&2
+    printf 'nemoclaw: previous SHA %s is not in this clone; rebuild host tools\n' "$old" >&2
   else
     plan_from_diff nemoclaw "$old"
   fi
+else
+  printf 'nemoclaw: no marker; skip host stage (health check will fail if gateway is down)\n' >&2
 fi
 
-sandbox_state="$(classify_host_sandbox)"
-printf 'sandbox state=%s\n' "$sandbox_state" >&2
-case "$sandbox_state" in
-  absent | error | unknown)
-    NEED_SANDBOX=1
-    SANDBOX_ACTION=onboard
-    printf 'sandbox: %s; onboard\n' "$sandbox_state" >&2
-    ;;
-  ready)
-    SANDBOX_ACTION=upgrade
-    if ! read_marker sandbox >/dev/null; then
-      NEED_SANDBOX=1
-      printf 'sandbox: ready with no marker; upgrade\n' >&2
-    else
-      old="$(read_marker sandbox)"
-      if ! commit_in_repo "$old"; then
-        NEED_SANDBOX=1
-        printf 'sandbox: previous SHA %s is not in this clone; upgrade\n' "$old" >&2
-      else
-        plan_from_diff sandbox "$old"
-      fi
-    fi
-    ;;
-esac
+printf 'sandbox: daily deploy never plans onboard or upgrade\n' >&2
 
 actions=()
 if [[ "$NEED_OLLAMA" -eq 1 ]]; then
@@ -160,9 +108,6 @@ if [[ "$NEED_OLLAMA" -eq 1 ]]; then
 fi
 if [[ "$NEED_NEMOCLAW" -eq 1 ]]; then
   actions+=(nemoclaw)
-fi
-if [[ "$NEED_SANDBOX" -eq 1 ]]; then
-  actions+=("$SANDBOX_ACTION")
 fi
 
 if [[ "${#actions[@]}" -eq 0 ]]; then
