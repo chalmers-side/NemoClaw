@@ -198,8 +198,8 @@ host_onboard_resume_only() {
       local i
       for i in $(seq 1 30); do
         repair_sandbox_boot
+        host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" start >/dev/null 2>&1 || true
         host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
-        host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" gateway restart >/dev/null 2>&1 || true
         state="$(classify_host_sandbox)"
         if [[ "$state" == "ready" ]]; then
           printf 'sandbox %s recovered to Ready; skip onboard\n' "$NEMOCLAW_SANDBOX_NAME"
@@ -253,8 +253,8 @@ host_onboard_resume_only() {
     local j
     for j in $(seq 1 30); do
       repair_sandbox_boot
+      host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" start >/dev/null 2>&1 || true
       host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
-      host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" gateway restart >/dev/null 2>&1 || true
       if [[ "$(classify_host_sandbox)" == "ready" ]]; then
         rm -f "$log"
         return 0
