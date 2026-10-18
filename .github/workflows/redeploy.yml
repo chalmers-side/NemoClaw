@@ -1,6 +1,6 @@
-name: Deploy NemoClaw
+name: Redeploy
 
-on: 
+on:
   push:
     branches:
       - main
@@ -8,21 +8,13 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: Machine to deploy (personal_config directory name)
+        description: Machine to upgrade (personal_config directory name)
         required: true
         type: choice
         options:
           - poc
           - chalmers
           - cliff
-      action:
-        description: onboard installs or recreates the sandbox; upgrade updates the pinned NemoClaw install
-        required: true
-        type: choice
-        default: onboard
-        options:
-          - onboard
-          - upgrade
 
 concurrency:
   # Push events have no inputs; those deploys go to poc.
@@ -30,12 +22,12 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read 
+  contents: read
 
 jobs:
-  deploy:
-    name: Deploy ${{ inputs.target || 'poc' }}
-    # Push to main or feature* deploys poc. A manual run still picks the target.
+  redeploy:
+    name: Redeploy ${{ inputs.target || 'poc' }}
+    # Push to main or feature* upgrades poc. A manual run still picks the target.
     # poc runs on the Mac mini runner. Other targets stay on nemoclaw,<user>.
     runs-on: ${{ fromJSON((inputs.target || 'poc') == 'poc' && '["self-hosted", "macOS", "ARM64", "chalmers-macmini-node-1"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target || 'poc')) }}
     environment: ${{ inputs.target || 'poc' }}
@@ -44,8 +36,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy
-        run: bash ./scripts/deploy.sh "$TARGET" "$ACTION"
+      - name: Redeploy
+        run: bash ./scripts/deploy.sh "$TARGET" upgrade
         env:
           TARGET: ${{ inputs.target || 'poc' }}
-          ACTION: ${{ inputs.action || 'onboard' }}

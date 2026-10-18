@@ -1,0 +1,36 @@
+name: First deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Machine to install (personal_config directory name)
+        required: true
+        type: choice
+        options:
+          - poc
+          - chalmers
+          - cliff
+
+concurrency:
+  group: nemoclaw-${{ inputs.target }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  first-deploy:
+    name: First deploy ${{ inputs.target }}
+    # poc runs on the Mac mini runner. Other targets stay on nemoclaw,<user>.
+    runs-on: ${{ fromJSON(inputs.target == 'poc' && '["self-hosted", "macOS", "ARM64", "chalmers-macmini-node-1"]' || format('["self-hosted", "nemoclaw", "{0}"]', inputs.target)) }}
+    environment: ${{ inputs.target }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: First deploy
+        run: bash ./scripts/deploy.sh "$TARGET" onboard
+        env:
+          TARGET: ${{ inputs.target }}

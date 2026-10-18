@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Deploy the NemoClaw compose stack for one personal_config target.
+# Deploy one personal_config target.
 # Usage: ./scripts/deploy.sh <target> [onboard|upgrade]
+# onboard = first install. upgrade = later redeploy. Do not destroy the
+# sandbox or the host gateway on upgrade.
 #
 # Secrets are read from personal_config/<target>/secrets.env (gitignored).
 # Do not enable xtrace; keys must not enter logs.
@@ -79,7 +81,7 @@ host_onboard_failure() {
     printf '\n--- openshell status ---\n'
     openshell status || true
   } >>"$log" 2>&1 || true
-  reason="$(grep -E 'Error:|×|failed to|did not|Permission denied|not ready|Cannot|providers_v2' "$log" | tail -n 20 || true)"
+  reason="$(grep -E 'Error:|×|failed to|Permission denied|not ready|Cannot|providers_v2' "$log" | grep -v 'Onboarding did not finish' | tail -n 20 || true)"
   die "onboard failed for ${NEMOCLAW_SANDBOX_NAME}. ${reason:-$(tail -c 800 "$log")}"
 }
 

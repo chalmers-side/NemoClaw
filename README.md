@@ -172,11 +172,9 @@ Settings → Environments → 建立與使用者同名的 environment（`chalmer
 
 ## 用 GitHub Actions 指定機器部署
 
-1. 開 repo 的 **Actions** → **Deploy NemoClaw** → **Run workflow**
-2. `target` 選 `poc`、`chalmers` 或 `cliff`。`poc` 只會被 `chalmers-macmini-node-1` 那台 runner 接走
-3. `action` 選：
-   - `onboard`：`compose up --build` 並建立 / 重建 sandbox
-   - `upgrade`：用 pin 的 SHA 重裝 controller 裡的 NemoClaw CLI，並檢查 sandbox 升級
+1. 第一次安裝：Actions → **First deploy** → **Run workflow**，選 `target`。這條只跑 `onboard`，不會在 push 時自動跑。
+2. 之後更新：Actions → **Redeploy**，或 push 到 `main` / `feature*`。這條只跑 `upgrade`，不 destroy sandbox，也不拆 host gateway。
+3. `poc` 只會被 `chalmers-macmini-node-1` 那台 runner 接走。
 4. 在 **Deployments** 看到對應 environment 的紀錄
 
 健康檢查：Actions → **Status NemoClaw** → 選同一台機器。只會報 healthy / unhealthy，**不會**把 dashboard URL 或 gateway token 印進 log。
@@ -203,7 +201,7 @@ bash ./scripts/deploy.sh chalmers onboard
 ## 旋轉金鑰
 
 1. 在該機器改 `personal_config/<user>/secrets.env`
-2. 再跑一次 **Deploy NemoClaw** / `onboard`（對齊官方 credential rotation：新 key 經環境變數進 onboard，註冊到 OpenShell gateway）
+2. 再跑一次 **First deploy** / `onboard`（對齊官方 credential rotation：新 key 經環境變數進 onboard，註冊到 OpenShell gateway）
 3. 不要把舊 key 留在 shell history；部署腳本結束會 unset 已載入的變數
 
 ## 重開機後恢復
@@ -261,5 +259,5 @@ NemoClaw 可能改用 `18789`–`18799` 的下一個空 port；以 `dashboard-ur
 1. 新增 `personal_config/<name>/config.env`
 2. 在 GitHub 建同名 Environment
 3. 在該機器裝 self-hosted runner，labels：`nemoclaw,<name>`
-4. 在 `.github/workflows/deploy.yml` 與 `status.yml` 的 `target` choice 加上 `<name>`
+4. 在 `.github/workflows/first-deploy.yml`、`redeploy.yml` 與 `status.yml` 的 `target` choice 加上 `<name>`
 5. 在該機器建立 `personal_config/<name>/secrets.env`（沒有 API key / bot token 可省略）
