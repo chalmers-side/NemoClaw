@@ -480,6 +480,63 @@ ensure_recorded_tls_gateway() {
   die "OpenShell gateway did not become Connected. status=$(openshell_status_text | tr '\n' ' '). log=$(tail -n 20 "$log" 2>/dev/null || true)"
 }
 
+is_owned_openshell_gateway() {
+  local args
+  args="$(ps -p "$1" -o args= 2>/dev/null || true)"
+  case "$args" in
+    *'openshell-gateway[nemoclaw='*) return 0 ;;
+  esac
+  return 1
+}
+
+# NemoClaw onboard only reuses a docker-driver gateway whose argv0 is
+# openshell-gateway[nemoclaw=<name>;port=<port>]. A plain nohup listener is
+# "other NemoClaw gateway". SIGTERM that leftover so onboard can launch the
+# tagged process. Do not kill -9. Do not stop docker-proxy.
+release_untagged_openshell_gateway() {
+  local pid args i still
+  printf '8080 listeners before onboard:\n'
+  lsof -nP -iTCP:8080 -sTCP:LISTEN 2>/dev/null || true
+  for pid in $(listener_pids 8080); do
+    args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+    case "$args" in
+      *docker-proxy*|*com.docker*)
+        die "127.0.0.1:8080 is a Docker-published port. Stop that container. Do not kill Docker.app."
+        ;;
+      *openshell-gateway*)
+        if is_owned_openshell_gateway "$pid"; then
+          printf 'keeping NemoClaw-owned openshell-gateway pid %s\n' "$pid"
+          continue
+        fi
+        printf 'stopping untagged openshell-gateway pid %s so onboard can own 8080\n' "$pid"
+        kill -TERM "$pid" || true
+        ;;
+    esac
+  done
+  for i in $(seq 1 15); do
+    still=0
+    for pid in $(listener_pids 8080); do
+      args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+      case "$args" in
+        *docker-proxy*|*com.docker*)
+          die "127.0.0.1:8080 is a Docker-published port. Stop that container. Do not kill Docker.app."
+          ;;
+        *openshell-gateway*)
+          if is_owned_openshell_gateway "$pid"; then
+            continue
+          fi
+          still=1
+          ;;
+      esac
+    done
+    [[ "$still" -eq 0 ]] && return 0
+    sleep 1
+  done
+  printf '8080 listeners after SIGTERM:\n'
+  lsof -nP -iTCP:8080 -sTCP:LISTEN 2>/dev/null || true
+  die "untagged openshell-gateway still holds 8080 after SIGTERM. Do not kill -9. Inspect lsof -nP -iTCP:8080 -sTCP:LISTEN."
+}
+
 # nemohermes onboard starts its own Docker-driver gateway on 127.0.0.1:8080.
 # A KeepAlive LaunchAgent takes the port back after onboard stops it.
 stop_actions_openshell_launchagent() {
