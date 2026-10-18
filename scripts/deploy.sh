@@ -154,11 +154,35 @@ destroy_sandbox_keep_gateway() {
     || die "destroy failed for ${NEMOCLAW_SANDBOX_NAME}. Start the sandbox container then rerun. Do not kill -9, and do not omit --no-cleanup-gateway."
 }
 
+start_sandbox_container_if_present() {
+  local cid
+  cid="$(docker ps -aq --filter "name=openshell-default--${NEMOCLAW_SANDBOX_NAME}" 2>/dev/null || true)"
+  cid="${cid%%$'\n'*}"
+  [[ -n "$cid" ]] || return 1
+  docker start "$cid" >/dev/null 2>&1 || true
+}
+
+repair_sandbox_boot() {
+  start_sandbox_container_if_present || true
+  repair_sandbox_openshell_hosts || true
+  ensure_openshell_openai_inference || true
+  ensure_hermes_inference_placeholder || true
+}
+
+repair_sandbox_while_onboard() {
+  local i
+  for i in $(seq 1 40); do
+    repair_sandbox_openshell_hosts || true
+    sleep 3
+  done
+}
+
 host_onboard_resume_only() {
-  local log state session extra=()
+  local log state session extra=() repair_pid=""
   log="$(mktemp)"
   prepare_host_openshell_env
   require_connected_gateway
+  ensure_openshell_openai_inference || true
   state="$(classify_host_sandbox)"
   session="$(classify_onboard_session)"
   printf 'sandbox state=%s session=%s\n' "$state" "$session"
@@ -169,14 +193,20 @@ host_onboard_resume_only() {
       return 0
       ;;
     error)
-      printf 'sandbox %s is Error; destroy then onboard\n' "$NEMOCLAW_SANDBOX_NAME"
-      destroy_sandbox_keep_gateway
-      session="$(classify_onboard_session)"
-      case "$session" in
-        resumable) extra=(--resume) ;;
-        stale) extra=(--fresh) ;;
-        *) extra=() ;;
-      esac
+      if [[ "$session" == "resumable" ]]; then
+        printf 'sandbox %s is Error with a resumable session; repair and --resume\n' "$NEMOCLAW_SANDBOX_NAME"
+        repair_sandbox_boot
+        extra=(--resume)
+      else
+        printf 'sandbox %s is Error; destroy then onboard\n' "$NEMOCLAW_SANDBOX_NAME"
+        destroy_sandbox_keep_gateway
+        session="$(classify_onboard_session)"
+        case "$session" in
+          resumable) extra=(--resume) ;;
+          stale) extra=(--fresh) ;;
+          *) extra=() ;;
+        esac
+      fi
       ;;
     absent)
       case "$session" in
@@ -205,9 +235,23 @@ host_onboard_resume_only() {
   esac
   printf 'onboard flags:%s\n' "${extra[*]:+ ${extra[*]}}"
   release_untagged_openshell_gateway
+  repair_sandbox_while_onboard &
+  repair_pid=$!
   if run_host_onboard "$log" "${extra[@]}"; then
+    kill "$repair_pid" 2>/dev/null || true
+    wait "$repair_pid" 2>/dev/null || true
     rm -f "$log"
     return 0
+  fi
+  kill "$repair_pid" 2>/dev/null || true
+  wait "$repair_pid" 2>/dev/null || true
+  if grep -q 'Agent setup failed' "$log"; then
+    printf 'Hermes agent setup failed; repair hosts/inference and --resume\n'
+    repair_sandbox_boot
+    if run_host_onboard "$log" --resume; then
+      rm -f "$log"
+      return 0
+    fi
   fi
   host_onboard_failure "$log"
 }
