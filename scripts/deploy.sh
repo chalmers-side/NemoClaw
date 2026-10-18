@@ -193,20 +193,18 @@ host_onboard_resume_only() {
       return 0
       ;;
     error)
-      if [[ "$session" == "resumable" ]]; then
-        printf 'sandbox %s is Error with a resumable session; repair and --resume\n' "$NEMOCLAW_SANDBOX_NAME"
-        repair_sandbox_boot
-        extra=(--resume)
-      else
-        printf 'sandbox %s is Error; destroy then onboard\n' "$NEMOCLAW_SANDBOX_NAME"
-        destroy_sandbox_keep_gateway
-        session="$(classify_onboard_session)"
-        case "$session" in
-          resumable) extra=(--resume) ;;
-          stale) extra=(--fresh) ;;
-          *) extra=() ;;
-        esac
+      printf 'sandbox %s is Error; repair then recheck\n' "$NEMOCLAW_SANDBOX_NAME"
+      repair_sandbox_boot
+      host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
+      state="$(classify_host_sandbox)"
+      if [[ "$state" == "ready" ]]; then
+        printf 'sandbox %s recovered to Ready; skip onboard\n' "$NEMOCLAW_SANDBOX_NAME"
+        rm -f "$log"
+        return 0
       fi
+      printf 'sandbox %s is still Error; destroy then onboard\n' "$NEMOCLAW_SANDBOX_NAME"
+      destroy_sandbox_keep_gateway
+      extra=()
       ;;
     absent)
       case "$session" in
@@ -246,9 +244,15 @@ host_onboard_resume_only() {
   kill "$repair_pid" 2>/dev/null || true
   wait "$repair_pid" 2>/dev/null || true
   if grep -q 'Agent setup failed' "$log"; then
-    printf 'Hermes agent setup failed; repair hosts/inference and --resume\n'
+    printf 'Hermes agent setup failed; repair, then destroy the not-ready sandbox and onboard again\n'
     repair_sandbox_boot
-    if run_host_onboard "$log" --resume; then
+    host_nemoclaw_cmd "$NEMOCLAW_SANDBOX_NAME" recover >/dev/null 2>&1 || true
+    if [[ "$(classify_host_sandbox)" == "ready" ]]; then
+      rm -f "$log"
+      return 0
+    fi
+    destroy_sandbox_keep_gateway
+    if run_host_onboard "$log"; then
       rm -f "$log"
       return 0
     fi
