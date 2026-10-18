@@ -172,7 +172,7 @@ Settings → Environments → 建立與使用者同名的 environment（`chalmer
 
 ## 用 GitHub Actions 指定機器部署
 
-1. 第一次安裝：Actions → **First deploy** → **Run workflow**，選 `target`。這條只跑 `onboard`，不會在 push 時自動跑。
+1. 第一次安裝：Actions → **Deploy NemoClaw**（`deploy.yml`，main 上叫這個名字）→ **Run workflow**。Branch 選 `feature/chalmers-poc`，target 選 `poc`。這條只跑 `onboard`。不要選 `main`。`First deploy` 那個 workflow 還不在 default branch，GitHub 會 Not found。
 2. 之後更新：Actions → **Redeploy**，或 push 到 `main` / `feature*`。這條只跑 `upgrade`，不 destroy sandbox，也不拆 host gateway。sandbox 還不存在時跳過，不會失敗；先跑 **First deploy**。
 3. `poc` 只會被 `chalmers-macmini-node-1` 那台 runner 接走。
 4. 在 **Deployments** 看到對應 environment 的紀錄
