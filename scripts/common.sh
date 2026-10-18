@@ -1376,51 +1376,53 @@ else:
 }
 
 # absent | error | ready | unknown
+# Prefer `openshell sandbox get`. `nemohermes status` probes inference.local
+# and can hang for minutes even when OpenShell phase is Ready.
 classify_host_sandbox() {
-  local cli log rc=0 cid
-  export PATH="/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
+  local log rc=0 cid phase
+  export PATH="/opt/homebrew/bin:${HOME}/.nemoclaw/openshell/bin:/opt/homebrew/opt/node@22/bin:${HOME}/.local/bin:${PATH}"
   cid="$(sandbox_container_id)"
-  cli="$(cli_name)"
-  if ! command -v "$cli" >/dev/null 2>&1; then
-    if [[ -n "$cid" ]]; then
-      printf 'unknown\n'
-    else
-      printf 'absent\n'
-    fi
-    return 0
-  fi
   log="$(mktemp)"
-  set +e
-  run_with_timeout 90 "$cli" "$NEMOCLAW_SANDBOX_NAME" status >"$log" 2>&1
-  rc=$?
-  set -e
-  if [[ "$rc" -eq 124 ]]; then
-    printf 'classify sandbox: status timed out after 90s\n' >&2
-    rm -f "$log"
-    printf 'unknown\n'
-    return 0
-  fi
-  if grep -F "Sandbox '${NEMOCLAW_SANDBOX_NAME}' does not exist" "$log" >/dev/null; then
-    rm -f "$log"
-    if [[ -n "$cid" ]]; then
-      printf 'unknown\n'
-    else
-      printf 'absent\n'
+  if command -v openshell >/dev/null 2>&1; then
+    set +e
+    run_with_timeout 15 openshell sandbox get "$NEMOCLAW_SANDBOX_NAME" >"$log" 2>&1
+    rc=$?
+    set -e
+    if grep -Ei 'does not exist|not found|no sandbox' "$log" >/dev/null; then
+      rm -f "$log"
+      if [[ -n "$cid" ]]; then
+        printf 'unknown\n'
+      else
+        printf 'absent\n'
+      fi
+      return 0
     fi
-    return 0
-  fi
-  if grep -Ei 'phase[: ]+error|status[: ]+error|sandbox phase: error' "$log" >/dev/null; then
-    rm -f "$log"
-    printf 'error\n'
-    return 0
-  fi
-  if grep -Ei 'phase[: ]+ready|status[: ]+ready|inference healthy|result=ready' "$log" >/dev/null; then
-    rm -f "$log"
-    printf 'ready\n'
-    return 0
+    if [[ "$rc" -eq 0 ]] || grep -qiE 'Phase:' "$log"; then
+      phase="$(grep -Ei '^[[:space:]]*Phase:' "$log" | tail -n 1 | awk '{print tolower($2)}')"
+      rm -f "$log"
+      case "$phase" in
+        ready) printf 'ready\n'; return 0 ;;
+        error) printf 'error\n'; return 0 ;;
+        *)
+          if [[ -n "$cid" ]]; then
+            printf 'unknown\n'
+          elif [[ -n "$phase" ]]; then
+            printf 'unknown\n'
+          else
+            printf 'absent\n'
+          fi
+          return 0
+          ;;
+      esac
+    fi
+    printf 'classify sandbox: openshell sandbox get failed; rc=%s\n' "$rc" >&2
   fi
   rm -f "$log"
-  printf 'unknown\n'
+  if [[ -n "$cid" ]]; then
+    printf 'unknown\n'
+  else
+    printf 'absent\n'
+  fi
 }
 
 verify_sandbox() {

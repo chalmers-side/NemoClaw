@@ -262,6 +262,7 @@ host_recover_sandbox() {
   repair_sandbox_openshell_hosts || true
   ensure_hermes_inference_placeholder || true
   ensure_hermes_discord_platform || true
+  # Dashboard forward 18789 is not required for Discord. OpenShell Ready is enough.
   state="$(classify_host_sandbox)"
   if [[ "$state" != "ready" ]]; then
     die "sandbox ${NEMOCLAW_SANDBOX_NAME} stayed ${state} after recover. Do not destroy, onboard, or recreate. If OpenShell phase is Error, follow MEMORY.md (docker stop the sandbox, launchctl bootout sh.brew.openshell, fix the status byte, bootstrap gateway, openshell sandbox start). Then rerun: bash ./scripts/recover-sandbox.sh ${TARGET}"
